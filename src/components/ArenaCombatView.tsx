@@ -254,6 +254,7 @@ export const ArenaCombatView: React.FC<ArenaCombatViewProps> = ({
   const isCompactLandscape =
     useCssLandscapeRotation || (viewportSize.h <= 520 && viewportSize.w >= viewportSize.h);
   const resizeCanvasFnRef = useRef<(() => void) | null>(null);
+  const npcToastTimerRef = useRef<number | null>(null);
 
   const displayMap = mode === 'world_explore' ? OVERWORLD_MAP : ARENAS[arenaId];
   const weapon = WEAPONS[profile.avatar.weaponId];
@@ -584,6 +585,11 @@ export const ArenaCombatView: React.FC<ArenaCombatViewProps> = ({
     return () => {
       cancelAnimationFrame(rafId);
       ro.disconnect();
+      sim.dispose();
+      if (npcToastTimerRef.current) {
+        window.clearTimeout(npcToastTimerRef.current);
+        npcToastTimerRef.current = null;
+      }
       window.removeEventListener('keydown', handleKeyDown);
       window.removeEventListener('keyup', handleKeyUp);
       if (mode === 'pvp_online' && onBindOnlineListeners) {
@@ -694,6 +700,13 @@ export const ArenaCombatView: React.FC<ArenaCombatViewProps> = ({
 
   const showNpcToast = (msg: string) => {
     setNpcNotice(msg);
+    if (npcToastTimerRef.current) {
+      window.clearTimeout(npcToastTimerRef.current);
+    }
+    npcToastTimerRef.current = window.setTimeout(() => {
+      setNpcNotice('');
+      npcToastTimerRef.current = null;
+    }, 3000);
   };
 
   const hpPct = Math.max(0, Math.min(100, Math.round((hud.hp / Math.max(1, hud.maxHp)) * 100)));

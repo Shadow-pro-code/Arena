@@ -6,10 +6,15 @@
   "scripts": {
     "dev": "tsx server.ts",
     "start": "node server.ts",
+    "start:prod": "vite build && node server.ts --prod",
     "build": "vite build",
     "preview": "vite preview",
     "clean": "rm -rf dist server.js",
-    "lint": "tsc --noEmit"
+    "lint": "tsc --noEmit",
+    "typecheck": "tsc --noEmit"
+  },
+  "engines": {
+    "node": ">=18.18.0"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",

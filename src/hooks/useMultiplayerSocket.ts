@@ -48,10 +48,16 @@ function isLikelyStaticHost(hostname: string): boolean {
 function normalizeServerBaseUrl(rawUrl: string): string {
   const clean = rawUrl.trim().replace(/\/+$/, '');
   if (!clean) return '';
-  if (/^https?:\/\//i.test(clean) || /^wss?:\/\//i.test(clean)) {
-    return clean;
+  const candidate = /^[a-z][a-z0-9+.-]*:\/\//i.test(clean) ? clean : `https://${clean}`;
+  try {
+    const parsed = new URL(candidate);
+    if (!['http:', 'https:', 'ws:', 'wss:'].includes(parsed.protocol)) {
+      return '';
+    }
+    return parsed.origin.replace(/\/+$/, '');
+  } catch {
+    return '';
   }
-  return `https://${clean}`;
 }
 
 function buildDefaultStaticLeaderboard(playerEntry?: {
@@ -108,6 +114,7 @@ export function useMultiplayerSocket() {
   const wsRef = useRef<WebSocket | null>(null);
   const broadcastRef = useRef<BroadcastChannel | null>(null);
   const reconnectTimer = useRef<number | null>(null);
+  const koTimerRef = useRef<number | null>(null);
   const retryCountRef = useRef(0);
   const damageListenerRef = useRef<((ev: OnlineDamageEvent) => void) | null>(null);
   const vfxListenerRef = useRef<((ev: OnlineVfxEvent) => void) | null>(null);
@@ -218,6 +225,8 @@ export function useMultiplayerSocket() {
       if (!httpBase) {
         setConnected(false);
         setConnectionMode('static_local');
+        setRooms([]);
+        setOnlinePlayers(1);
         setLeaderboard((prev) => (prev.length > 0 ? prev : buildDefaultStaticLeaderboard()));
         return;
       }
@@ -305,7 +314,13 @@ export function useMultiplayerSocket() {
           const killerName = String(msg.killerName || '');
           const victimName = String(msg.victimName || '');
           setKoAnnouncement(`${killerName} أطاح بـ ${victimName}!`);
-          window.setTimeout(() => setKoAnnouncement(''), 2800);
+          if (koTimerRef.current) {
+            window.clearTimeout(koTimerRef.current);
+          }
+          koTimerRef.current = window.setTimeout(() => {
+            setKoAnnouncement('');
+            koTimerRef.current = null;
+          }, 2800);
         } else if (type === 'chat:message') {
           const chatMsg = msg.message as ChatMessage | undefined;
           if (!chatMsg || !chatMsg.id) return;
@@ -382,6 +397,7 @@ export function useMultiplayerSocket() {
     fetchLeaderboard();
     return () => {
       if (reconnectTimer.current) window.clearTimeout(reconnectTimer.current);
+      if (koTimerRef.current) window.clearTimeout(koTimerRef.current);
       if (wsRef.current) {
         wsRef.current.onclose = null;
         wsRef.current.close();

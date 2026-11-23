@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   ArrowUpCircle,
   Check,
@@ -69,6 +69,15 @@ export const ArmoryView: React.FC<ArmoryViewProps> = ({
   const [inspectedId, setInspectedId] = useState<WeaponId>(profile.avatar.weaponId);
   const [previewAct, setPreviewAct] = useState<'idle' | 'attack'>('attack');
   const [notice, setNotice] = useState('');
+  const noticeTimerRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (noticeTimerRef.current) {
+        window.clearTimeout(noticeTimerRef.current);
+      }
+    };
+  }, []);
 
   const inspected = WEAPONS[inspectedId];
   const isUnlocked = profile.unlockedWeapons.includes(inspectedId);
@@ -92,7 +101,13 @@ export const ArmoryView: React.FC<ArmoryViewProps> = ({
 
   const showNotice = (msg: string) => {
     setNotice(msg);
-    window.setTimeout(() => setNotice(''), 2600);
+    if (noticeTimerRef.current) {
+      window.clearTimeout(noticeTimerRef.current);
+    }
+    noticeTimerRef.current = window.setTimeout(() => {
+      setNotice('');
+      noticeTimerRef.current = null;
+    }, 2600);
   };
 
   return (

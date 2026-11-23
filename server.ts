@@ -1,4 +1,6 @@
+import 'dotenv/config';
 import express from 'express';
+import fs from 'fs';
 import http from 'http';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -16,15 +18,157 @@ import type {
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const PORT = 3000;
+const rawPort = Number(process.env.PORT);
+const PORT =
+  Number.isFinite(rawPort) && rawPort >= 1 && rawPort <= 65535 ? Math.floor(rawPort) : 3000;
+const IS_PRODUCTION =
+  process.env.NODE_ENV === 'production' || process.argv.includes('--prod');
+
+const VALID_ARENAS = new Set<ArenaId>([
+  'obsidian_citadel',
+  'magma_caldera',
+  'glacier_spire',
+  'sunstone_dunes',
+  'celestial_sanctuary',
+  'abyssal_colosseum',
+]);
+
+const VALID_WEAPONS = new Set<WeaponId>([
+  'vanguard_sword',
+  'shadow_daggers',
+  'storm_hammer',
+  'dragon_spear',
+  'solar_bow',
+  'void_staff',
+  'arcane_tome',
+  'crimson_wand',
+  'radiant_scepter',
+  'astral_censer',
+  'bastion_mace',
+  'aegis_greatshield',
+]);
+
+const VALID_ANIM_STATES = new Set<OnlineFighterSnapshot['animState']>([
+  'idle',
+  'run',
+  'attack',
+  'heavy',
+  'power',
+  'dodge',
+  'block',
+  'hurt',
+  'dead',
+]);
+
+const VALID_VFX_KINDS = new Set([
+  'slash',
+  'heavy',
+  'power',
+  'explosion',
+  'frost',
+  'thunder',
+  'holy',
+  'void',
+  'fusion',
+]);
+
+function finiteOr(value: unknown, fallback: number): number {
+  const num = Number(value);
+  return Number.isFinite(num) ? num : fallback;
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, value));
+}
+
+function sanitizeText(raw: unknown, fallback: string, maxLen: number): string {
+  const cleaned = String(raw ?? '')
+    .replace(/[\u0000-\u001F\u007F]/g, '')
+    .trim()
+    .slice(0, maxLen);
+  return cleaned || fallback;
+}
+
+function sanitizeColor(raw: unknown, fallback: string): string {
+  const str = String(raw ?? '').trim();
+  return /^#[0-9A-Fa-f]{3,8}$/.test(str) ? str : fallback;
+}
+
+function sanitizeArenaId(raw: unknown): ArenaId {
+  return typeof raw === 'string' && VALID_ARENAS.has(raw as ArenaId)
+    ? (raw as ArenaId)
+    : 'obsidian_citadel';
+}
+
+function sanitizeWeaponId(raw: unknown): WeaponId {
+  return typeof raw === 'string' && VALID_WEAPONS.has(raw as WeaponId)
+    ? (raw as WeaponId)
+    : 'vanguard_sword';
+}
+
+function sanitizeAvatar(raw: unknown, fallback: AvatarConfig): AvatarConfig {
+  if (!raw || typeof raw !== 'object') return fallback;
+  const src = raw as Partial<AvatarConfig>;
+  const name = sanitizeText(src.name, fallback.name, 22);
+  const title = sanitizeText(src.title, fallback.title, 28);
+  const weaponId = sanitizeWeaponId(src.weaponId);
+
+  const safeStats = {
+    str: clamp(Math.round(finiteOr(src.stats?.str, fallback.stats.str)), 1, 99),
+    agi: clamp(Math.round(finiteOr(src.stats?.agi, fallback.stats.agi)), 1, 99),
+    vit: clamp(Math.round(finiteOr(src.stats?.vit, fallback.stats.vit)), 1, 99),
+    int: clamp(Math.round(finiteOr(src.stats?.int, fallback.stats.int)), 1, 99),
+    def: clamp(Math.round(finiteOr(src.stats?.def, fallback.stats.def)), 1, 99),
+    dex: clamp(Math.round(finiteOr(src.stats?.dex, fallback.stats.dex)), 1, 99),
+    spr: clamp(Math.round(finiteOr(src.stats?.spr, fallback.stats.spr)), 1, 99),
+    lck: clamp(Math.round(finiteOr(src.stats?.lck, fallback.stats.lck)), 1, 99),
+  };
+
+  return {
+    ...fallback,
+    name,
+    title,
+    build:
+      src.build === 'agile' || src.build === 'balanced' || src.build === 'heavy'
+        ? src.build
+        : fallback.build,
+    heightScale: clamp(finiteOr(src.heightScale, fallback.heightScale), 0.85, 1.2),
+    shoulderScale: clamp(finiteOr(src.shoulderScale, fallback.shoulderScale), 0.85, 1.25),
+    skinTone: sanitizeColor(src.skinTone, fallback.skinTone),
+    headStyle: typeof src.headStyle === 'string' ? (src.headStyle as AvatarConfig['headStyle']) : fallback.headStyle,
+    helmetColor: sanitizeColor(src.helmetColor, fallback.helmetColor),
+    eyeGlow: sanitizeColor(src.eyeGlow, fallback.eyeGlow),
+    armorStyle: typeof src.armorStyle === 'string' ? (src.armorStyle as AvatarConfig['armorStyle']) : fallback.armorStyle,
+    primaryColor: sanitizeColor(src.primaryColor, fallback.primaryColor),
+    secondaryColor: sanitizeColor(src.secondaryColor, fallback.secondaryColor),
+    accentColor: sanitizeColor(src.accentColor, fallback.accentColor),
+    backGear: typeof src.backGear === 'string' ? (src.backGear as AvatarConfig['backGear']) : fallback.backGear,
+    auraStyle: typeof src.auraStyle === 'string' ? (src.auraStyle as AvatarConfig['auraStyle']) : fallback.auraStyle,
+    weaponId,
+    powerId: typeof src.powerId === 'string' ? (src.powerId as AvatarConfig['powerId']) : fallback.powerId,
+    secondaryPowerId:
+      typeof src.secondaryPowerId === 'string'
+        ? (src.secondaryPowerId as AvatarConfig['secondaryPowerId'])
+        : fallback.secondaryPowerId,
+    powerSlots:
+      Array.isArray(src.powerSlots) && src.powerSlots.length === 4
+        ? (src.powerSlots.map((p, idx) =>
+            typeof p === 'string' ? p : fallback.powerSlots[idx]
+          ) as AvatarConfig['powerSlots'])
+        : fallback.powerSlots,
+    stats: safeStats,
+  };
+}
 
 interface ServerPlayer {
   id: string;
   ws: WebSocket;
+  isAlive: boolean;
   roomId: string | null;
   snapshot: OnlineFighterSnapshot;
   lastHitSentAt: number;
   lastChatSentAt: number;
+  respawnTimer: ReturnType<typeof setTimeout> | null;
 }
 
 interface ServerRoom {
@@ -114,10 +258,15 @@ function getRankTitle(rating: number): string {
 
 function generateRoomCode(): string {
   const letters = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
-  const a = letters[Math.floor(Math.random() * letters.length)];
-  const b = letters[Math.floor(Math.random() * letters.length)];
-  const num = Math.floor(10 + Math.random() * 89);
-  return `${a}${b}-${num}`;
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    const a = letters[Math.floor(Math.random() * letters.length)];
+    const b = letters[Math.floor(Math.random() * letters.length)];
+    const num = Math.floor(10 + Math.random() * 89);
+    const candidate = `${a}${b}-${num}`;
+    const exists = Array.from(rooms.values()).some((r) => r.code === candidate);
+    if (!exists) return candidate;
+  }
+  return `AR-${Math.floor(100 + Math.random() * 899)}`;
 }
 
 function getRoomSummaries(): OnlineRoomSummary[] {
@@ -167,6 +316,10 @@ function broadcastRoomState(room: ServerRoom) {
 }
 
 function leaveCurrentRoom(player: ServerPlayer) {
+  if (player.respawnTimer) {
+    clearTimeout(player.respawnTimer);
+    player.respawnTimer = null;
+  }
   if (!player.roomId) return;
   const room = rooms.get(player.roomId);
   player.roomId = null;
@@ -195,23 +348,29 @@ function upsertLeaderboard(entry: {
   rating: number;
   wins: number;
   weaponId: WeaponId;
+  rankTitle?: string;
 }) {
-  const cleanName = String(entry.name || 'مقاتل').slice(0, 24);
+  const cleanName = sanitizeText(entry.name, 'مقاتل', 24);
+  const safeRating = clamp(Math.round(entry.rating), 800, 4000);
+  const safeWins = clamp(Math.round(entry.wins), 0, 100000);
+  const safeWeapon = sanitizeWeaponId(entry.weaponId);
+  const computedTitle = sanitizeText(entry.rankTitle, getRankTitle(safeRating), 22);
+
   const existing = leaderboard.find((l) => l.id === entry.id);
   if (existing) {
     existing.name = cleanName;
-    existing.rating = Math.max(800, Math.min(4000, Math.round(entry.rating)));
-    existing.wins = Math.max(0, Math.round(entry.wins));
-    existing.weaponId = entry.weaponId;
-    existing.rankTitle = getRankTitle(existing.rating);
+    existing.rating = safeRating;
+    existing.wins = safeWins;
+    existing.weaponId = safeWeapon;
+    existing.rankTitle = getRankTitle(safeRating);
   } else {
     leaderboard.push({
       id: entry.id,
       name: cleanName,
-      rankTitle: getRankTitle(entry.rating),
-      rating: Math.max(800, Math.min(4000, Math.round(entry.rating))),
-      wins: Math.max(0, Math.round(entry.wins)),
-      weaponId: entry.weaponId,
+      rankTitle: computedTitle || getRankTitle(safeRating),
+      rating: safeRating,
+      wins: safeWins,
+      weaponId: safeWeapon,
       isLiveUser: true,
     });
   }
@@ -223,7 +382,29 @@ function upsertLeaderboard(entry: {
 
 async function startServer() {
   const app = express();
-  app.use(express.json());
+  app.use(express.json({ limit: '32kb' }));
+
+  // Allow cross-origin static builds (e.g. GitHub Pages) to connect to this public arena API
+  app.use('/api', (_req, res, next) => {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+    if (_req.method === 'OPTIONS') {
+      res.status(204).end();
+      return;
+    }
+    next();
+  });
+
+  app.get('/api/health', (_req, res) => {
+    res.json({
+      ok: true,
+      onlinePlayers: players.size,
+      activeRooms: getRoomSummaries().length,
+      uptimeSec: Math.round(process.uptime()),
+      mode: IS_PRODUCTION ? 'production' : 'development',
+    });
+  });
 
   app.get('/api/rooms', (_req, res) => {
     res.json({ rooms: getRoomSummaries(), onlinePlayers: players.size });
@@ -235,28 +416,54 @@ async function startServer() {
 
   app.post('/api/leaderboard/report', (req, res) => {
     const body = req.body as {
-      id?: string;
-      name?: string;
-      rating?: number;
-      wins?: number;
-      weaponId?: WeaponId;
+      id?: unknown;
+      name?: unknown;
+      rating?: unknown;
+      wins?: unknown;
+      weaponId?: unknown;
+      rankTitle?: unknown;
     };
-    if (!body || !body.id || !body.name || typeof body.rating !== 'number') {
-      res.status(400).json({ error: 'بيانات غير مكتملة' });
+    const cleanId = sanitizeText(body?.id, '', 40);
+    const cleanName = sanitizeText(body?.name, '', 24);
+    const ratingNum = typeof body?.rating === 'number' ? body.rating : Number.NaN;
+    if (!body || !cleanId || !cleanName || !Number.isFinite(ratingNum)) {
+      res.status(400).json({ error: 'بيانات غير مكتملة أو غير صالحة' });
       return;
     }
+    const winsNum =
+      typeof body.wins === 'number' && Number.isFinite(body.wins) ? body.wins : 0;
     upsertLeaderboard({
-      id: String(body.id).slice(0, 40),
-      name: String(body.name).slice(0, 24),
-      rating: body.rating,
-      wins: typeof body.wins === 'number' ? body.wins : 0,
-      weaponId: body.weaponId || 'vanguard_sword',
+      id: cleanId,
+      name: cleanName,
+      rating: ratingNum,
+      wins: winsNum,
+      weaponId: sanitizeWeaponId(body.weaponId),
+      rankTitle: typeof body.rankTitle === 'string' ? body.rankTitle : undefined,
     });
     res.json({ leaderboard });
   });
 
   const server = http.createServer(app);
-  const wss = new WebSocketServer({ server, path: '/ws/arena' });
+  const wss = new WebSocketServer({
+    server,
+    path: '/ws/arena',
+    maxPayload: 64 * 1024,
+  });
+
+  const heartbeatInterval = setInterval(() => {
+    for (const player of players.values()) {
+      if (!player.isAlive) {
+        player.ws.terminate();
+        continue;
+      }
+      player.isAlive = false;
+      player.ws.ping();
+    }
+  }, 30000);
+
+  wss.on('close', () => {
+    clearInterval(heartbeatInterval);
+  });
 
   wss.on('connection', (ws) => {
     const playerId = `p_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
@@ -304,13 +511,20 @@ async function startServer() {
     const serverPlayer: ServerPlayer = {
       id: playerId,
       ws,
+      isAlive: true,
       roomId: null,
       snapshot: defaultSnap,
       lastHitSentAt: 0,
       lastChatSentAt: 0,
+      respawnTimer: null,
     };
 
     players.set(playerId, serverPlayer);
+
+    ws.on('pong', () => {
+      serverPlayer.isAlive = true;
+    });
+
     sendJson(ws, {
       type: 'connected',
       playerId,
@@ -322,7 +536,9 @@ async function startServer() {
     ws.on('message', (raw) => {
       let msg: Record<string, unknown>;
       try {
-        msg = JSON.parse(String(raw));
+        const parsed = JSON.parse(String(raw));
+        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return;
+        msg = parsed as Record<string, unknown>;
       } catch {
         return;
       }
@@ -336,11 +552,11 @@ async function startServer() {
 
       if (type === 'room:create') {
         leaveCurrentRoom(serverPlayer);
-        const arenaId = (msg.arenaId as ArenaId) || 'obsidian_citadel';
-        const avatar = (msg.avatar as AvatarConfig) || serverPlayer.snapshot.avatar;
-        const maxHp = Math.max(120, Math.min(600, Number(msg.maxHp) || 220));
-        const weaponLevel = Math.max(1, Math.min(5, Number(msg.weaponLevel) || 1));
-        const roomName = String(msg.roomName || `ساحة ${avatar.name}`).slice(0, 32);
+        const arenaId = sanitizeArenaId(msg.arenaId);
+        const avatar = sanitizeAvatar(msg.avatar, serverPlayer.snapshot.avatar);
+        const maxHp = clamp(Math.round(finiteOr(msg.maxHp, 220)), 120, 600);
+        const weaponLevel = clamp(Math.round(finiteOr(msg.weaponLevel, 1)), 1, 5);
+        const roomName = sanitizeText(msg.roomName, `ساحة ${avatar.name}`, 32);
 
         const roomId = `room_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 5)}`;
         const code = generateRoomCode();
@@ -348,7 +564,7 @@ async function startServer() {
 
         serverPlayer.snapshot = {
           ...serverPlayer.snapshot,
-          name: avatar.name || 'مقاتل',
+          name: avatar.name,
           avatar,
           weaponLevel,
           x: spawn.x,
@@ -367,7 +583,7 @@ async function startServer() {
           code,
           name: roomName,
           arenaId,
-          hostName: avatar.name || 'مقاتل',
+          hostName: avatar.name,
           maxPlayers: 4,
           players: new Map([[playerId, serverPlayer]]),
           messages: [
@@ -409,7 +625,11 @@ async function startServer() {
       }
 
       if (type === 'room:join') {
-        const codeOrId = String(msg.codeOrId || '').trim().toUpperCase();
+        const codeOrId = sanitizeText(msg.codeOrId, '', 32).toUpperCase();
+        if (!codeOrId) {
+          sendJson(ws, { type: 'room:error', message: 'يرجى إدخال رمز الغرفة.' });
+          return;
+        }
         const targetRoom = Array.from(rooms.values()).find(
           (r) => r.code.toUpperCase() === codeOrId || r.id.toUpperCase() === codeOrId
         );
@@ -423,14 +643,14 @@ async function startServer() {
         }
 
         leaveCurrentRoom(serverPlayer);
-        const avatar = (msg.avatar as AvatarConfig) || serverPlayer.snapshot.avatar;
-        const maxHp = Math.max(120, Math.min(600, Number(msg.maxHp) || 220));
-        const weaponLevel = Math.max(1, Math.min(5, Number(msg.weaponLevel) || 1));
+        const avatar = sanitizeAvatar(msg.avatar, serverPlayer.snapshot.avatar);
+        const maxHp = clamp(Math.round(finiteOr(msg.maxHp, 220)), 120, 600);
+        const weaponLevel = clamp(Math.round(finiteOr(msg.weaponLevel, 1)), 1, 5);
         const spawn = spawnPositionForIndex(targetRoom.players.size);
 
         serverPlayer.snapshot = {
           ...serverPlayer.snapshot,
-          name: avatar.name || 'مقاتل',
+          name: avatar.name,
           avatar,
           weaponLevel,
           x: spawn.x,
@@ -495,16 +715,18 @@ async function startServer() {
         if (!room) return;
         if (serverPlayer.snapshot.hp <= 0) return;
 
-        serverPlayer.snapshot.x = Math.max(-65, Math.min(65, Number(msg.x) || 0));
-        serverPlayer.snapshot.y = Math.max(0, Math.min(10, Number(msg.y) || 0));
-        serverPlayer.snapshot.z = Math.max(-65, Math.min(65, Number(msg.z) || 0));
-        serverPlayer.snapshot.yaw = Number(msg.yaw) || 0;
-        serverPlayer.snapshot.animState = (msg.animState as OnlineFighterSnapshot['animState']) || 'idle';
-        serverPlayer.snapshot.animTimer = Number(msg.animTimer) || 0;
-        serverPlayer.snapshot.comboStep = Number(msg.comboStep) || 0;
+        serverPlayer.snapshot.x = clamp(finiteOr(msg.x, serverPlayer.snapshot.x), -65, 65);
+        serverPlayer.snapshot.y = clamp(finiteOr(msg.y, serverPlayer.snapshot.y), 0, 10);
+        serverPlayer.snapshot.z = clamp(finiteOr(msg.z, serverPlayer.snapshot.z), -65, 65);
+        serverPlayer.snapshot.yaw = clamp(finiteOr(msg.yaw, serverPlayer.snapshot.yaw), -Math.PI * 4, Math.PI * 4);
+
+        const nextAnim = String(msg.animState || 'idle') as OnlineFighterSnapshot['animState'];
+        serverPlayer.snapshot.animState = VALID_ANIM_STATES.has(nextAnim) ? nextAnim : 'idle';
+        serverPlayer.snapshot.animTimer = clamp(finiteOr(msg.animTimer, 0), 0, 5);
+        serverPlayer.snapshot.comboStep = clamp(Math.floor(finiteOr(msg.comboStep, 0)), 0, 6);
         serverPlayer.snapshot.shieldActive = Boolean(msg.shieldActive);
         serverPlayer.snapshot.overdriveActive = Boolean(msg.overdriveActive);
-        serverPlayer.snapshot.energy = Math.max(0, Math.min(100, Number(msg.energy) || 0));
+        serverPlayer.snapshot.energy = clamp(finiteOr(msg.energy, serverPlayer.snapshot.energy), 0, 100);
 
         broadcastRoom(
           room,
@@ -531,10 +753,10 @@ async function startServer() {
           return;
         }
 
-        const rawDamage = Math.max(5, Math.min(115, Number(msg.damage) || 20));
+        const rawDamage = clamp(finiteOr(msg.damage, 20), 5, 115);
         const isCritical = Boolean(msg.critical);
-        const knockX = Math.max(-8, Math.min(8, Number(msg.knockX) || 0));
-        const knockZ = Math.max(-8, Math.min(8, Number(msg.knockZ) || 0));
+        const knockX = clamp(finiteOr(msg.knockX, 0), -8, 8);
+        const knockZ = clamp(finiteOr(msg.knockZ, 0), -8, 8);
         const finalDamage = target.snapshot.shieldActive ? Math.round(rawDamage * 0.35) : Math.round(rawDamage);
 
         target.snapshot.hp = Math.max(0, target.snapshot.hp - finalDamage);
@@ -560,12 +782,16 @@ async function startServer() {
             killerKills: serverPlayer.snapshot.kills,
           });
 
+          if (target.respawnTimer) {
+            clearTimeout(target.respawnTimer);
+          }
           // Respawn defeated fighter after 2.6 seconds so online arena stays lively
-          setTimeout(() => {
+          target.respawnTimer = setTimeout(() => {
+            target.respawnTimer = null;
             const liveRoom = rooms.get(room.id);
             if (!liveRoom) return;
             const liveTarget = liveRoom.players.get(targetId);
-            if (!liveTarget) return;
+            if (!liveTarget || liveTarget.roomId !== room.id) return;
             const spawn = spawnPositionForIndex(Math.floor(Math.random() * 4));
             liveTarget.snapshot.hp = liveTarget.snapshot.maxHp;
             liveTarget.snapshot.x = spawn.x;
@@ -581,16 +807,17 @@ async function startServer() {
         if (!serverPlayer.roomId) return;
         const room = rooms.get(serverPlayer.roomId);
         if (!room) return;
+        const rawKind = String(msg.kind || 'slash');
         broadcastRoom(
           room,
           {
             type: 'player:vfx',
             playerId,
-            kind: String(msg.kind || 'slash'),
-            x: Number(msg.x) || 0,
-            z: Number(msg.z) || 0,
-            color: String(msg.color || '#F59E0B'),
-            radius: Math.max(1, Math.min(12, Number(msg.radius) || 4)),
+            kind: VALID_VFX_KINDS.has(rawKind) ? rawKind : 'slash',
+            x: clamp(finiteOr(msg.x, 0), -65, 65),
+            z: clamp(finiteOr(msg.z, 0), -65, 65),
+            color: sanitizeColor(msg.color, '#F59E0B'),
+            radius: clamp(finiteOr(msg.radius, 4), 1, 12),
           },
           playerId
         );
@@ -600,13 +827,13 @@ async function startServer() {
       if (type === 'chat:send') {
         const now = Date.now();
         if (now - serverPlayer.lastChatSentAt < 450) return;
-        const text = String(msg.text || '').trim().slice(0, 180);
+        const text = sanitizeText(msg.text, '', 180);
         if (!text) return;
         serverPlayer.lastChatSentAt = now;
 
         const requestedChannel = msg.channel === 'room' ? 'room' : 'world';
-        const senderName = String(msg.senderName || serverPlayer.snapshot.name || 'مقاتل').slice(0, 24);
-        const senderRank = String(msg.senderRank || 'مغامر').slice(0, 18);
+        const senderName = sanitizeText(msg.senderName, serverPlayer.snapshot.name, 24);
+        const senderRank = sanitizeText(msg.senderRank, 'مغامر', 18);
         const isQuick = Boolean(msg.isQuick);
 
         if (requestedChannel === 'room' && serverPlayer.roomId) {
@@ -649,7 +876,7 @@ async function startServer() {
     });
   });
 
-  if (process.env.NODE_ENV !== 'production') {
+  if (!IS_PRODUCTION) {
     const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
       server: { middlewareMode: true },
@@ -658,14 +885,30 @@ async function startServer() {
     app.use(vite.middlewares);
   } else {
     const distPath = path.resolve(__dirname, 'dist');
+    const indexPath = path.join(distPath, 'index.html');
+    if (!fs.existsSync(indexPath)) {
+      console.error('Production build not found at dist/index.html. Run "npm run build" first.');
+      process.exit(1);
+    }
     app.use(express.static(distPath));
     app.get('*', (_req, res) => {
-      res.sendFile(path.join(distPath, 'index.html'));
+      res.sendFile(indexPath);
     });
   }
 
+  server.on('error', (err: NodeJS.ErrnoException) => {
+    if (err.code === 'EADDRINUSE') {
+      console.error(
+        `Port ${PORT} is already in use. Close the other process or set PORT=3001 in .env before starting.`
+      );
+    } else {
+      console.error('Server error:', err);
+    }
+    process.exit(1);
+  });
+
   server.listen(PORT, '0.0.0.0', () => {
-    console.log(`Maydan Al-Abtal server listening on http://0.0.0.0:${PORT}`);
+    console.log(`Maydan Al-Abtal server listening on http://localhost:${PORT}`);
   });
 }
 

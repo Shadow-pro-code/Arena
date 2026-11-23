@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Check, Crown, Dices, Minus, Plus, Radar, RotateCcw, Wand2 } from 'lucide-react';
 import type {
   ArmorStyle,
@@ -204,6 +204,15 @@ export const AvatarForge: React.FC<AvatarForgeProps> = ({
   const [powerSlotTarget, setPowerSlotTarget] = useState<0 | 1 | 2 | 3>(0);
   const [previewAct, setPreviewAct] = useState<'idle' | 'attack' | 'power'>('idle');
   const [feedback, setFeedback] = useState<string>('');
+  const toastTimerRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (toastTimerRef.current) {
+        window.clearTimeout(toastTimerRef.current);
+      }
+    };
+  }, []);
 
   const syncedDraft: AvatarConfig = {
     ...draft,
@@ -223,7 +232,13 @@ export const AvatarForge: React.FC<AvatarForgeProps> = ({
 
   const showToast = (msg: string) => {
     setFeedback(msg);
-    window.setTimeout(() => setFeedback(''), 2600);
+    if (toastTimerRef.current) {
+      window.clearTimeout(toastTimerRef.current);
+    }
+    toastTimerRef.current = window.setTimeout(() => {
+      setFeedback('');
+      toastTimerRef.current = null;
+    }, 2600);
   };
 
   const handleSave = () => {

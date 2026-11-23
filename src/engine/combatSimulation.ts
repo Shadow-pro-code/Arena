@@ -396,6 +396,7 @@ export class CombatSimulation {
     targetId: string;
     arenaId?: ArenaId;
   } | null = null;
+  private roundResetTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(opts: CombatInitOptions) {
     this.opts = opts;
@@ -2087,7 +2088,7 @@ export class CombatSimulation {
     if (monster.hp <= 0) {
       this.kills += 1;
       this.monsterKillsByType[monster.archetype] = (this.monsterKillsByType[monster.archetype] || 0) + 1;
-      if (monster.isBoss) this.bossKills += 1;
+      if (monster.isBoss && !monster.secretBossId) this.bossKills += 1;
       this.advanceMissionProgress('kill', 1);
       audioSynth.playKo();
       this.spawnBurst(monster.x, monster.y + 1.2, monster.z, MONSTERS[monster.archetype].accentColor, 20);
@@ -2097,7 +2098,6 @@ export class CombatSimulation {
         if (sb) {
           this.defeatedSecretBossIds.add(sb.id);
           this.secretBossesDefeatedCount += 1;
-          this.bonusMissionGold += sb.rewardGold;
           this.opts.onDefeatSecretBoss?.(sb);
           audioSynth.playAchievementUnlock();
           this.rings.push({
@@ -2240,7 +2240,11 @@ export class CombatSimulation {
         this.finishMatch(this.scoreP1 >= 2);
       } else {
         this.showBanner(`النتيجة ${this.scoreP1} - ${this.scoreP2} — جولة جديدة!`, 2.2);
-        setTimeout(() => {
+        if (this.roundResetTimer) {
+          clearTimeout(this.roundResetTimer);
+        }
+        this.roundResetTimer = setTimeout(() => {
+          this.roundResetTimer = null;
           if (this.finished) return;
           const p1 = this.getPlayer1();
           const p2 = this.getPlayer2();
@@ -2469,9 +2473,21 @@ export class CombatSimulation {
     });
   }
 
+  public dispose() {
+    if (this.roundResetTimer) {
+      clearTimeout(this.roundResetTimer);
+      this.roundResetTimer = null;
+    }
+    this.finished = true;
+  }
+
   public finishMatch(victory: boolean) {
     if (this.finished) return;
     this.finished = true;
+    if (this.roundResetTimer) {
+      clearTimeout(this.roundResetTimer);
+      this.roundResetTimer = null;
+    }
 
     const mult = this.arena.rewardMultiplier;
     const baseGold =
@@ -3351,7 +3367,6 @@ export class CombatSimulation {
         } else {
           this.completedWorldEventIds.add(evt.id);
           this.worldEventsCompletedCount += 1;
-          this.bonusMissionGold += evt.rewardGold;
           this.opts.onCompleteWorldEvent?.(evt);
           audioSynth.playAchievementUnlock();
           this.rings.push({

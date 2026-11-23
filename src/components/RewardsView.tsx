@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   Award,
   Briefcase,
@@ -64,10 +64,25 @@ export const RewardsView: React.FC<RewardsViewProps> = ({
 }) => {
   const [openedReward, setOpenedReward] = useState<ChestRewardOutcome | null>(null);
   const [notice, setNotice] = useState('');
+  const noticeTimerRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (noticeTimerRef.current) {
+        window.clearTimeout(noticeTimerRef.current);
+      }
+    };
+  }, []);
 
   const showNotice = (msg: string) => {
     setNotice(msg);
-    window.setTimeout(() => setNotice(''), 2600);
+    if (noticeTimerRef.current) {
+      window.clearTimeout(noticeTimerRef.current);
+    }
+    noticeTimerRef.current = window.setTimeout(() => {
+      setNotice('');
+      noticeTimerRef.current = null;
+    }, 2600);
   };
 
   const handleOpen = (type: 'warrior' | 'mythic') => {
