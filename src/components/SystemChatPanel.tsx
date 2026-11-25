@@ -77,7 +77,7 @@ export const SystemChatPanel: React.FC<SystemChatPanelProps> = ({
   return (
     <div
       className={`system-window rounded-xl flex flex-col overflow-hidden ${
-        compact ? 'w-full max-w-md max-h-[94%]' : 'w-full'
+        compact ? 'm-auto w-full max-w-md max-h-full landscape-modal-card' : 'w-full'
       }`}
     >
       {/* Header */}

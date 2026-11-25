@@ -8,6 +8,7 @@ import type {
   GearId,
   GearSlot,
   GraphicsQuality,
+  KeyBindingsConfig,
   MatchResult,
   MonsterArchetype,
   OnlineFighterSnapshot,
@@ -21,6 +22,7 @@ import type {
   WorldEventZoneDef,
   WorldFastTravelDef,
 } from '../types/game';
+import { DEFAULT_KEY_BINDINGS } from '../data/controlDefaults';
 import {
   ARENAS,
   CONSUMABLES,
@@ -64,6 +66,10 @@ interface SimFighter extends RenderFighter {
   slotCooldowns: [number, number, number, number];
   dodgeCooldown: number;
   dodgeTimer: number;
+  dodgeChainTimer: number;
+  coyoteTimer: number;
+  jumpBufferTimer: number;
+  squashTimer: number;
   invulnTimer: number;
   shieldTimer: number;
   overdriveTimer: number;
@@ -271,6 +277,8 @@ export interface CombatInitOptions {
   onFusionCast?: () => void;
   quality: GraphicsQuality;
   cameraView: CameraViewMode;
+  keyBindings?: KeyBindingsConfig;
+  showFloatingDamage?: boolean;
   rivalChampion?: RivalChampion;
   localP2Avatar?: AvatarConfig;
   onlineSelfId?: string;
@@ -319,9 +327,13 @@ export class CombatSimulation {
 
   public camera: Camera3D;
   private camYaw = 0;
+  private camPitch = 0.42;
+  private camZoom = 1.0;
   private shakeTimer = 0;
   private shakeIntensity = 0;
   private hitstopTimer = 0;
+  private keyBindings: KeyBindingsConfig;
+  private showFloatingDamage = true;
 
   private time = 0;
   private wave = 1;
@@ -404,6 +416,8 @@ export class CombatSimulation {
     this.arena = opts.mode === 'world_explore' ? OVERWORLD_MAP : ARENAS[opts.arenaId];
     this.quality = opts.quality;
     this.cameraView = opts.cameraView;
+    this.keyBindings = { ...DEFAULT_KEY_BINDINGS, ...(opts.keyBindings || {}) };
+    this.showFloatingDamage = opts.showFloatingDamage ?? true;
     this.rivalChampion = opts.rivalChampion || RIVAL_CHAMPIONS[0];
     this.unlockedSkillSlots = opts.unlockedSkillSlots ?? 1;
     this.powerLevels = opts.powerLevels || {};
@@ -494,6 +508,9 @@ export class CombatSimulation {
       shieldActive: false,
       overdriveActive: false,
       frozenTimer: 0,
+      bankAngle: 0,
+      squash: 1,
+      isAirborne: false,
       team,
       attackCooldown: 0,
       heavyCooldown: 0,
@@ -502,6 +519,10 @@ export class CombatSimulation {
       slotCooldowns: [0, 0, 0, 0],
       dodgeCooldown: 0,
       dodgeTimer: 0,
+      dodgeChainTimer: 0,
+      coyoteTimer: 0.12,
+      jumpBufferTimer: 0,
+      squashTimer: 0,
       invulnTimer: 0,
       shieldTimer: 0,
       overdriveTimer: 0,
@@ -576,7 +597,15 @@ export class CombatSimulation {
     }
 
     const ambCount =
-      this.quality === 'eco' ? 6 : this.quality === 'balanced' ? 16 : this.quality === 'high' ? 24 : 32;
+      this.quality === 'eco'
+        ? 6
+        : this.quality === 'balanced'
+          ? 16
+          : this.quality === 'high'
+            ? 24
+            : this.quality === 'impossible'
+              ? 36
+              : 32;
     for (let i = 0; i < ambCount; i++) {
       this.spawnAmbientMote();
     }
@@ -689,8 +718,27 @@ export class CombatSimulation {
     this.virtualInput.mz = mz;
   }
 
+  public setKeyBindings(kb: KeyBindingsConfig) {
+    this.keyBindings = { ...DEFAULT_KEY_BINDINGS, ...kb };
+  }
+
+  public setShowFloatingDamage(show: boolean) {
+    this.showFloatingDamage = show;
+  }
+
   public rotateCameraYaw(delta: number) {
     this.camYaw += delta;
+  }
+
+  public rotateCamera(dYaw: number, dPitch = 0) {
+    this.camYaw += dYaw;
+    if (dPitch !== 0) {
+      this.camPitch = Math.max(0.08, Math.min(1.25, this.camPitch + dPitch));
+    }
+  }
+
+  public zoomCamera(delta: number) {
+    this.camZoom = Math.max(0.65, Math.min(1.5, this.camZoom + delta));
   }
 
   public syncOnlineFighters(remoteSnapshots: OnlineFighterSnapshot[]) {
@@ -798,9 +846,9 @@ export class CombatSimulation {
   }
 
   public toggleSprint() {
-    if (this.mode !== 'world_explore') return;
     this.sprintActive = !this.sprintActive;
-    this.showBanner(this.sprintActive ? 'تم تفعيل الركض السريع (+75% سرعة)' : 'عودة إلى المشي العادي', 1.4);
+    const bonusText = this.mode === 'world_explore' ? '+75% سرعة' : '+22% رشاقة قتالية';
+    this.showBanner(this.sprintActive ? `تم تفعيل الركض السريع (${bonusText})` : 'عودة إلى المشي العادي', 1.4);
   }
 
   public teleportPlayer(x: number, z: number, label: string) {
@@ -856,22 +904,49 @@ export class CombatSimulation {
     return false;
   }
 
+  private triggerJump(fighter: SimFighter): boolean {
+    if (fighter.stunTimer > 0) return false;
+    const groundY = this.getTerrainHeight(fighter.x, fighter.z);
+    const canJumpNow = fighter.y <= groundY + 0.08 || fighter.coyoteTimer > 0;
+    if (!canJumpNow) {
+      fighter.jumpBufferTimer = 0.14;
+      return false;
+    }
+    fighter.vy = 11.4 + Math.min(2.4, fighter.avatar.stats.agi * 0.08);
+    fighter.y = Math.max(fighter.y, groundY + 0.04);
+    fighter.coyoteTimer = 0;
+    fighter.jumpBufferTimer = 0;
+    fighter.isAirborne = true;
+    fighter.squash = 1.18;
+    fighter.squashTimer = 0.16;
+    if (fighter.team === 'player1') {
+      audioSynth.playJump();
+    }
+    this.spawnBurst(fighter.x, groundY + 0.15, fighter.z, '#E2E8F0', 5);
+    return true;
+  }
+
   private handleInstantKeyPress(code: string) {
     if (this.paused || this.finished) return;
     const p1 = this.getPlayer1();
+    const kb = this.keyBindings;
     if (p1 && p1.hp > 0) {
-      if (code === 'Space' || code === 'KeyJ') this.queueOrRunPlayerAction('attack');
-      else if (code === 'KeyE') this.queueOrRunPlayerAction('heavy');
-      else if (code === 'KeyQ') this.queueOrRunPlayerAction('skill0');
-      else if (code === 'KeyR') this.queueOrRunPlayerAction('skill1');
-      else if (code === 'KeyZ') this.queueOrRunPlayerAction('skill2');
-      else if (code === 'KeyX') this.queueOrRunPlayerAction('skill3');
-      else if (code === 'KeyC') this.toggleSprint();
-      else if (code === 'ShiftLeft' || code === 'ShiftRight') this.queueOrRunPlayerAction('dodge');
-      else if (code === 'KeyG') this.triggerInteract();
-      else if (code === 'Digit1') this.triggerConsumable('elixir_heal');
-      else if (code === 'Digit2') this.triggerConsumable('scroll_energy');
-      else if (code === 'Digit3') this.triggerConsumable('tonic_fury');
+      if (code === kb.jump) this.triggerJump(p1);
+      else if (code === kb.attack) this.queueOrRunPlayerAction('attack');
+      else if (code === kb.heavy) this.queueOrRunPlayerAction('heavy');
+      else if (code === kb.skill0) this.queueOrRunPlayerAction('skill0');
+      else if (code === kb.skill1) this.queueOrRunPlayerAction('skill1');
+      else if (code === kb.skill2) this.queueOrRunPlayerAction('skill2');
+      else if (code === kb.skill3) this.queueOrRunPlayerAction('skill3');
+      else if (code === kb.sprint) this.toggleSprint();
+      else if (code === kb.dodge || (kb.dodge === 'ShiftLeft' && code === 'ShiftRight'))
+        this.queueOrRunPlayerAction('dodge');
+      else if (code === kb.interact) this.triggerInteract();
+      else if (code === kb.potion1) this.triggerConsumable('elixir_heal');
+      else if (code === kb.potion2) this.triggerConsumable('scroll_energy');
+      else if (code === kb.potion3) this.triggerConsumable('tonic_fury');
+      else if (code === 'Equal' || code === 'NumpadAdd') this.zoomCamera(-0.1);
+      else if (code === 'Minus' || code === 'NumpadSubtract') this.zoomCamera(0.1);
     }
     if (this.mode === 'pvp_local') {
       const p2 = this.getPlayer2();
@@ -895,6 +970,7 @@ export class CombatSimulation {
       | 'skill2'
       | 'skill3'
       | 'dodge'
+      | 'jump'
       | 'block_start'
       | 'block_end'
       | 'interact'
@@ -910,10 +986,11 @@ export class CombatSimulation {
     else if (action === 'skill2') this.queueOrRunPlayerAction('skill2');
     else if (action === 'skill3') this.queueOrRunPlayerAction('skill3');
     else if (action === 'dodge') this.queueOrRunPlayerAction('dodge');
+    else if (action === 'jump') this.triggerJump(p1);
     else if (action === 'interact') this.triggerInteract();
     else if (action === 'sprint') this.toggleSprint();
-    else if (action === 'block_start') this.keys.add('KeyF');
-    else if (action === 'block_end') this.keys.delete('KeyF');
+    else if (action === 'block_start') this.keys.add(this.keyBindings.block);
+    else if (action === 'block_end') this.keys.delete(this.keyBindings.block);
   }
 
   public triggerInteract() {
@@ -1181,25 +1258,40 @@ export class CombatSimulation {
       fighter.yaw = Math.atan2(nearest.x - fighter.x, nearest.z - fighter.z);
     }
 
+    const rollChainBonus = fighter.dodgeChainTimer > 0;
+    if (rollChainBonus) {
+      fighter.dodgeChainTimer = 0;
+    }
+
     fighter.comboStep = (fighter.comboStep + 1) % 3;
     const comboMult = fighter.comboStep === 2 ? 1.3 : 1.0;
     const overdriveMult = fighter.overdriveActive ? 1.55 : 1.0;
     const highGroundMult = fighter.onHighGround ? 1.12 : 1.0;
-    const baseDmg = fighter.statsDerived.attackDamage * comboMult * overdriveMult * highGroundMult;
-    const isCrit = Math.random() * 100 < fighter.statsDerived.critChance;
+    const rollMult = rollChainBonus ? 1.15 : 1.0;
+    const baseDmg = fighter.statsDerived.attackDamage * comboMult * overdriveMult * highGroundMult * rollMult;
+    const isCrit = Math.random() * 100 < fighter.statsDerived.critChance + (rollChainBonus ? 12 : 0);
     const dmg = Math.round(baseDmg * (isCrit ? 1.65 : 1));
 
     fighter.animState = 'attack';
     fighter.animTime = 0;
     fighter.attackCooldown = 1 / (weapon.attackSpeed * fighter.statsDerived.attackSpeedMult);
 
-    audioSynth.playSwing(
-      weapon.id === 'shadow_daggers' || weapon.id === 'crimson_wand'
-        ? 1.45
-        : weapon.id === 'storm_hammer' || weapon.id === 'aegis_greatshield'
-          ? 0.72
-          : 1.0
-    );
+    if (rollChainBonus && !weapon.isRanged) {
+      fighter.vx += Math.sin(fighter.yaw) * 6.4;
+      fighter.vz += Math.cos(fighter.yaw) * 6.4;
+      audioSynth.playRollCombo();
+      if (fighter.team === 'player1') {
+        this.spawnFloatingText(fighter.x, fighter.y + 2.4, fighter.z, 'ضربة التفاف +15%!', '#38BDF8', 1.08);
+      }
+    } else {
+      audioSynth.playSwing(
+        weapon.id === 'shadow_daggers' || weapon.id === 'crimson_wand'
+          ? 1.45
+          : weapon.id === 'storm_hammer' || weapon.id === 'aegis_greatshield'
+            ? 0.72
+            : 1.0
+      );
+    }
 
     if (weapon.isRanged) {
       const speed =
@@ -1915,9 +2007,10 @@ export class CombatSimulation {
   private triggerDodge(fighter: SimFighter): boolean {
     if (fighter.dodgeCooldown > 0 || fighter.stunTimer > 0) return false;
     fighter.dodgeTimer = 0.24;
+    fighter.dodgeChainTimer = 0.55;
     fighter.invulnTimer = 0.38;
-    fighter.attackCooldown = Math.min(fighter.attackCooldown, 0.12);
-    fighter.dodgeCooldown = Math.max(0.7, 1.35 - fighter.avatar.stats.agi * 0.038);
+    fighter.attackCooldown = Math.min(fighter.attackCooldown, 0.1);
+    fighter.dodgeCooldown = Math.max(0.65, 1.3 - fighter.avatar.stats.agi * 0.038);
     fighter.animState = 'dodge';
     fighter.animTime = 0;
     this.dashTrails.push({
@@ -1931,8 +2024,8 @@ export class CombatSimulation {
       life: 0.28,
       maxLife: 0.28,
     });
-    fighter.vx = Math.sin(fighter.yaw) * 16.0;
-    fighter.vz = Math.cos(fighter.yaw) * 16.0;
+    fighter.vx = Math.sin(fighter.yaw) * 16.5;
+    fighter.vz = Math.cos(fighter.yaw) * 16.5;
     audioSynth.playDodge();
     this.spawnBurst(fighter.x, fighter.y + 0.4, fighter.z, '#CBD5E1', 6);
     return true;
@@ -2819,6 +2912,10 @@ export class CombatSimulation {
     }
     if (f.dodgeCooldown > 0) f.dodgeCooldown = Math.max(0, f.dodgeCooldown - dt);
     if (f.dodgeTimer > 0) f.dodgeTimer = Math.max(0, f.dodgeTimer - dt);
+    if (f.dodgeChainTimer > 0) f.dodgeChainTimer = Math.max(0, f.dodgeChainTimer - dt);
+    if (f.coyoteTimer > 0) f.coyoteTimer = Math.max(0, f.coyoteTimer - dt);
+    if (f.jumpBufferTimer > 0) f.jumpBufferTimer = Math.max(0, f.jumpBufferTimer - dt);
+    if (f.squashTimer > 0) f.squashTimer = Math.max(0, f.squashTimer - dt);
     if (f.magmaTickTimer > 0) f.magmaTickTimer = Math.max(0, f.magmaTickTimer - dt);
 
     if (f.shieldTimer > 0) {
@@ -2846,6 +2943,13 @@ export class CombatSimulation {
 
     // Terrain zone & elevation detection
     const groundY = this.getTerrainHeight(f.x, f.z);
+    if (f.y <= groundY + 0.08 && f.vy <= 0) {
+      f.coyoteTimer = 0.12;
+      if (f.jumpBufferTimer > 0 && f.team === 'player1') {
+        this.triggerJump(f);
+      }
+    }
+
     f.onHighGround = groundY > 0.25;
     let zoneSpeedMult = 1.0;
     f.terrainNote = f.onHighGround ? 'مرتفع تكتيكي (+12% ضرر)' : '';
@@ -2880,23 +2984,25 @@ export class CombatSimulation {
       }
     }
 
-    const sprintMult = this.mode === 'world_explore' && f.team === 'player1' && this.sprintActive ? 1.75 : 1.0;
+    const sprintMult =
+      f.team === 'player1' && this.sprintActive ? (this.mode === 'world_explore' ? 1.75 : 1.22) : 1.0;
     const speedMult = (f.frozenTimer > 0 ? 0.5 : 1.0) * (f.overdriveActive ? 1.15 : 1.0) * zoneSpeedMult * sprintMult;
     let moveX = 0;
     let moveZ = 0;
     let blocking = false;
 
     if (f.team === 'player1') {
-      if (this.keys.has('KeyW') || (this.mode !== 'pvp_local' && this.keys.has('ArrowUp'))) moveZ -= 1;
-      if (this.keys.has('KeyS') || (this.mode !== 'pvp_local' && this.keys.has('ArrowDown'))) moveZ += 1;
-      if (this.keys.has('KeyA') || (this.mode !== 'pvp_local' && this.keys.has('ArrowLeft'))) moveX -= 1;
-      if (this.keys.has('KeyD') || (this.mode !== 'pvp_local' && this.keys.has('ArrowRight'))) moveX += 1;
+      const kb = this.keyBindings;
+      if (this.keys.has(kb.moveForward) || (this.mode !== 'pvp_local' && this.keys.has('ArrowUp'))) moveZ -= 1;
+      if (this.keys.has(kb.moveBackward) || (this.mode !== 'pvp_local' && this.keys.has('ArrowDown'))) moveZ += 1;
+      if (this.keys.has(kb.moveLeft) || (this.mode !== 'pvp_local' && this.keys.has('ArrowLeft'))) moveX -= 1;
+      if (this.keys.has(kb.moveRight) || (this.mode !== 'pvp_local' && this.keys.has('ArrowRight'))) moveX += 1;
 
       if (Math.abs(this.virtualInput.mx) > 0.05 || Math.abs(this.virtualInput.mz) > 0.05) {
         moveX += this.virtualInput.mx;
         moveZ += this.virtualInput.mz;
       }
-      blocking = this.keys.has('KeyF');
+      blocking = this.keys.has(kb.block);
     } else if (f.team === 'player2') {
       if (this.keys.has('ArrowUp')) moveZ -= 1;
       if (this.keys.has('ArrowDown')) moveZ += 1;
@@ -2922,23 +3028,31 @@ export class CombatSimulation {
       moveZ = rz;
     }
 
+    let targetBank = 0;
     if (f.stunTimer <= 0 && f.dodgeTimer <= 0) {
-      if (blocking) {
+      if (blocking && !f.isAirborne) {
         f.animState = 'block';
-        f.vx *= 0.8;
-        f.vz *= 0.8;
+        f.vx *= Math.pow(0.04, dt);
+        f.vz *= Math.pow(0.04, dt);
       } else if (Math.abs(moveX) > 0.01 || Math.abs(moveZ) > 0.01) {
         const sp = f.statsDerived.moveSpeed * speedMult;
-        f.vx += (moveX * sp - f.vx) * Math.min(1, dt * 22);
-        f.vz += (moveZ * sp - f.vz) * Math.min(1, dt * 22);
+        const accel = f.isAirborne ? 13.5 : 17.5;
+        f.vx += (moveX * sp - f.vx) * Math.min(1, dt * accel);
+        f.vz += (moveZ * sp - f.vz) * Math.min(1, dt * accel);
+        const desiredYaw = Math.atan2(moveX, moveZ);
+        let diffYaw = desiredYaw - f.yaw;
+        while (diffYaw > Math.PI) diffYaw -= Math.PI * 2;
+        while (diffYaw < -Math.PI) diffYaw += Math.PI * 2;
         if (f.animState !== 'attack' && f.animState !== 'heavy' && f.animState !== 'power') {
-          f.yaw = Math.atan2(moveX, moveZ);
+          f.yaw += diffYaw * (1 - Math.exp(-16 * dt));
           f.animState = 'run';
+          targetBank = Math.max(-0.26, Math.min(0.26, diffYaw * 0.42));
         }
-        f.walkPhase += dt * (sp / 5.8);
+        f.walkPhase += dt * (sp / 5.6) * (f.isAirborne ? 0.35 : 1);
       } else {
-        f.vx *= Math.pow(0.015, dt);
-        f.vz *= Math.pow(0.015, dt);
+        const damp = f.isAirborne ? 0.35 : 0.008;
+        f.vx *= Math.pow(damp, dt);
+        f.vz *= Math.pow(damp, dt);
         if (f.animState === 'run' || f.animState === 'block') {
           f.animState = 'idle';
         }
@@ -2947,6 +3061,8 @@ export class CombatSimulation {
       f.vx *= Math.pow(0.25, dt);
       f.vz *= Math.pow(0.25, dt);
     }
+
+    f.bankAngle = (f.bankAngle || 0) + (targetBank - (f.bankAngle || 0)) * (1 - Math.exp(-12 * dt));
 
     if (
       (f.animState === 'attack' && f.animTime > 0.3) ||
@@ -2961,18 +3077,33 @@ export class CombatSimulation {
     f.z += f.vz * dt;
     this.constrainToArena(f);
 
-    // Smooth vertical platform stepping + airborne leap gravity
+    // Smooth vertical platform stepping + airborne jump gravity + landing squash
     const targetGround = this.getTerrainHeight(f.x, f.z);
-    if (f.vy > 0 || f.y > targetGround + 0.02) {
-      f.vy -= 18 * dt;
+    if (f.vy > 0 || f.y > targetGround + 0.03) {
+      f.isAirborne = true;
+      const prevVy = f.vy;
+      f.vy -= 26.5 * dt;
       f.y += f.vy * dt;
       if (f.y <= targetGround) {
         f.y = targetGround;
         f.vy = 0;
+        f.isAirborne = false;
+        if (prevVy < -2.6) {
+          f.squash = 0.78;
+          f.squashTimer = 0.18;
+          this.spawnBurst(f.x, targetGround + 0.1, f.z, '#CBD5E1', 5);
+          if (f.team === 'player1') {
+            audioSynth.playLand();
+          }
+        }
       }
     } else {
+      f.isAirborne = false;
       f.y += (targetGround - f.y) * Math.min(1, dt * 14);
     }
+
+    const desiredSquash = f.squashTimer > 0 ? (f.squash ?? 1) : f.isAirborne ? 1.1 : 1.0;
+    f.squash = (f.squash ?? 1) + (desiredSquash - (f.squash ?? 1)) * (1 - Math.exp(-15 * dt));
   }
 
   private computeAiFighterControl(ai: SimFighter, dt: number): { mx: number; mz: number; blocking: boolean } {
@@ -3604,79 +3735,65 @@ export class CombatSimulation {
       }
     }
 
-    let desiredPos = { x: focusX, y: 10, z: focusZ + 12 };
-    let desiredTarget = { x: focusX, y: 1.4 + p1.y * 0.4, z: focusZ };
+    let baseDist = 11.8;
+    let basePitch = 0.44;
+    let targetY = 1.55 + p1.y * 0.42;
+    let sideX = 0;
+    let sideZ = 0;
 
     if (this.cameraView === 'third_person') {
-      const dist = 10.6;
-      const height = 6.2 + p1.y * 0.5;
-      desiredPos = {
-        x: focusX + Math.sin(this.camYaw) * dist,
-        y: height,
-        z: focusZ + Math.cos(this.camYaw) * dist,
-      };
-      desiredTarget = { x: focusX, y: 1.6 + p1.y * 0.4, z: focusZ };
+      baseDist = 11.8;
+      basePitch = 0.44;
+      targetY = 1.6 + p1.y * 0.42;
       this.camera.fov = 50;
     } else if (this.cameraView === 'over_shoulder') {
-      const dist = 6.2;
-      const height = 3.2 + p1.y * 0.5;
-      const sideX = Math.cos(this.camYaw) * 1.15;
-      const sideZ = -Math.sin(this.camYaw) * 1.15;
-      desiredPos = {
-        x: focusX + Math.sin(this.camYaw) * dist + sideX,
-        y: height,
-        z: focusZ + Math.cos(this.camYaw) * dist + sideZ,
-      };
-      desiredTarget = {
-        x: focusX - Math.sin(this.camYaw) * 2.2 + sideX * 0.4,
-        y: 1.7 + p1.y * 0.4,
-        z: focusZ - Math.cos(this.camYaw) * 2.2 + sideZ * 0.4,
-      };
+      baseDist = 6.8;
+      basePitch = 0.25;
+      sideX = Math.cos(this.camYaw) * 1.15;
+      sideZ = -Math.sin(this.camYaw) * 1.15;
+      targetY = 1.65 + p1.y * 0.42;
       this.camera.fov = 54;
     } else if (this.cameraView === 'isometric_3d') {
-      const dist = 15.8;
-      const height = 12.6 + p1.y * 0.4;
-      desiredPos = {
-        x: focusX + Math.sin(this.camYaw) * dist,
-        y: height,
-        z: focusZ + Math.cos(this.camYaw) * dist,
-      };
-      desiredTarget = { x: focusX, y: 1.0, z: focusZ };
+      baseDist = 19.6;
+      basePitch = 0.66;
+      targetY = 1.0 + p1.y * 0.35;
       this.camera.fov = 44;
     } else if (this.cameraView === 'top_tactical') {
-      const dist = 11.5;
-      const height = 21.5 + p1.y * 0.4;
-      desiredPos = {
-        x: focusX + Math.sin(this.camYaw) * dist,
-        y: height,
-        z: focusZ + Math.cos(this.camYaw) * dist,
-      };
-      desiredTarget = { x: focusX, y: 0.6, z: focusZ };
+      baseDist = 23.8;
+      basePitch = 1.04;
+      targetY = 0.6 + p1.y * 0.3;
       this.camera.fov = 45;
     } else if (this.cameraView === 'cinematic_free') {
-      const dist = 9.0;
-      const height = 2.85 + p1.y * 0.45;
-      desiredPos = {
-        x: focusX + Math.sin(this.camYaw) * dist,
-        y: height,
-        z: focusZ + Math.cos(this.camYaw) * dist,
-      };
-      desiredTarget = { x: focusX, y: 1.85 + p1.y * 0.4, z: focusZ };
+      baseDist = 9.4;
+      basePitch = 0.22;
+      targetY = 1.85 + p1.y * 0.42;
       this.camera.fov = 58;
     } else {
       // side_fighter
-      const dist = 13.0;
-      const height = 4.0 + p1.y * 0.5;
-      desiredPos = {
-        x: focusX + Math.sin(this.camYaw) * dist,
-        y: height,
-        z: focusZ + Math.cos(this.camYaw) * dist,
-      };
-      desiredTarget = { x: focusX, y: 1.55 + p1.y * 0.4, z: focusZ };
+      baseDist = 13.4;
+      basePitch = 0.26;
+      targetY = 1.55 + p1.y * 0.42;
       this.camera.fov = 46;
     }
 
-    const lerp = 1 - Math.exp(-8.5 * dt);
+    const effPitch = Math.max(0.06, Math.min(1.32, basePitch + (this.camPitch - 0.42)));
+    const dist = baseDist * this.camZoom;
+    const horizDist = dist * Math.cos(effPitch);
+    const vertOffset = dist * Math.sin(effPitch);
+
+    const shoulderLookBias = this.cameraView === 'over_shoulder' ? 2.1 : 0;
+    const desiredPos = {
+      x: focusX + Math.sin(this.camYaw) * horizDist + sideX,
+      y: Math.max(1.1, p1.y + 1.25 + vertOffset),
+      z: focusZ + Math.cos(this.camYaw) * horizDist + sideZ,
+    };
+    const desiredTarget = {
+      x: focusX - Math.sin(this.camYaw) * shoulderLookBias + sideX * 0.38,
+      y: targetY,
+      z: focusZ - Math.cos(this.camYaw) * shoulderLookBias + sideZ * 0.38,
+    };
+
+    const lerp = 1 - Math.exp(-9.5 * dt);
     this.camera.pos.x += (desiredPos.x - this.camera.pos.x) * lerp;
     this.camera.pos.y += (desiredPos.y - this.camera.pos.y) * lerp;
     this.camera.pos.z += (desiredPos.z - this.camera.pos.z) * lerp;
@@ -3723,6 +3840,7 @@ export class CombatSimulation {
       floatingTexts: this.floatingTexts,
       shrineCooldowns: { ...this.shrineCooldowns },
       showFloorLabels: true,
+      showFloatingDamage: this.showFloatingDamage,
       openedChests: Array.from(this.openedChests),
       gatheredNodeIds,
       discoveredWaystoneIds: Array.from(this.discoveredWaystones),

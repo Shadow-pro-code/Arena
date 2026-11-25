@@ -78,10 +78,10 @@ export const PvpCompetitionView: React.FC<PvpCompetitionViewProps> = ({
   const selectedLocalP2 = RIVAL_CHAMPIONS.find((c) => c.id === localP2Id) || RIVAL_CHAMPIONS[1];
 
   return (
-    <main className="max-w-[1360px] mx-auto px-4 sm:px-6 py-6 sm:py-8 space-y-8">
+    <main className="ui-shell-container space-y-[var(--ui-section-gap)]">
       <div className="flex flex-wrap items-end justify-between gap-4 border-b border-[#E6B85C]/20 pb-5">
         <div>
-          <h1 className="font-display text-2xl sm:text-3xl font-extrabold text-[#F1F5F9]">
+          <h1 className="font-display ui-section-title font-extrabold text-[#F1F5F9]">
             ساحات التنافس المباشر بين اللاعبين
           </h1>
           <p className="text-sm text-[#94A3B8] mt-1">
@@ -183,9 +183,9 @@ export const PvpCompetitionView: React.FC<PvpCompetitionViewProps> = ({
       )}
 
       {/* Row 1: Real-Time Online Multiplayer Rooms + Local 1v1 Duel */}
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-stretch">
+      <div className="grid grid-cols-1 lg:grid-cols-12 landscape-split-12 gap-5 sm:gap-6 items-stretch">
         {/* Live WebSocket Rooms */}
-        <section className="lg:col-span-7 system-window rounded-xl p-5 sm:p-6 flex flex-col justify-between space-y-6">
+        <section className="lg:col-span-7 landscape-span-7 system-window rounded-xl p-4 sm:p-6 flex flex-col justify-between space-y-5 sm:space-y-6">
           <div className="space-y-4">
             <div className="flex items-center justify-between gap-3">
               <div>
@@ -303,7 +303,7 @@ export const PvpCompetitionView: React.FC<PvpCompetitionViewProps> = ({
         </section>
 
         {/* Local 1v1 Shared-Arena PvP */}
-        <section className="lg:col-span-5 system-window rounded-xl p-5 sm:p-6 flex flex-col justify-between space-y-5">
+        <section className="lg:col-span-5 landscape-span-5 system-window rounded-xl p-4 sm:p-6 flex flex-col justify-between space-y-4 sm:space-y-5">
           <div className="space-y-4">
             <div className="flex items-center gap-2 text-[#E6B85C]">
               <Users className="w-5 h-5" />

@@ -111,10 +111,10 @@ export const ArmoryView: React.FC<ArmoryViewProps> = ({
   };
 
   return (
-    <main className="max-w-[1360px] mx-auto px-4 sm:px-6 py-6 sm:py-8 space-y-6">
-      <div className="flex flex-wrap items-end justify-between gap-4 border-b border-[#E6B85C]/20 pb-5">
+    <main className="ui-shell-container space-y-[var(--ui-section-gap)]">
+      <div className="flex flex-wrap items-end justify-between gap-4 border-b border-[#E6B85C]/20 pb-5 landscape-compact-header">
         <div>
-          <h1 className="font-display text-2xl sm:text-3xl font-extrabold text-[#F1F5F9]">
+          <h1 className="font-display ui-section-title font-extrabold text-[#F1F5F9]">
             المتجر والترسانة والسامان
           </h1>
           <p className="text-sm text-[#94A3B8] mt-1">
@@ -137,7 +137,7 @@ export const ArmoryView: React.FC<ArmoryViewProps> = ({
       </div>
 
       {/* Store Main Tabs */}
-      <div className="flex flex-wrap items-center gap-2 border-b border-white/10 pb-3">
+      <div className="flex flex-nowrap items-center gap-2 border-b border-white/10 pb-3 overflow-x-auto no-scrollbar">
         {(
           [
             { id: 'weapons', label: `1. متجر الأسلحة (${WEAPON_LIST.length})` },
@@ -149,7 +149,7 @@ export const ArmoryView: React.FC<ArmoryViewProps> = ({
             key={t.id}
             type="button"
             onClick={() => setShopTab(t.id)}
-            className={`px-4 py-2 text-sm font-bold rounded-lg border transition-colors whitespace-nowrap cursor-pointer ${
+            className={`px-4 py-2 text-xs sm:text-sm font-bold rounded-lg border transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
               shopTab === t.id
                 ? 'bg-[#E6B85C] text-[#0A0F1A] border-[#F5D076] shadow-md shadow-[#E6B85C]/15'
                 : 'bg-[#121B2D]/90 text-[#CBD5E1] border-white/10 hover:text-[#F1F5F9]'
@@ -195,9 +195,9 @@ export const ArmoryView: React.FC<ArmoryViewProps> = ({
             ))}
           </div>
 
-          <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-stretch">
+          <div className="grid grid-cols-1 lg:grid-cols-12 landscape-split-12 gap-6 items-stretch">
             {/* Live 3D Weapon Showcase */}
-            <section className="lg:col-span-5 flex flex-col bg-[#121B2D]/90 backdrop-blur-md border border-[#E6B85C]/20 rounded-xl overflow-hidden shadow-xl">
+            <section className="lg:col-span-5 landscape-span-5 flex flex-col bg-[#121B2D]/90 backdrop-blur-md border border-[#E6B85C]/20 rounded-xl overflow-hidden shadow-xl">
               <div className="flex items-center justify-between px-4 py-3 border-b border-white/10 bg-[#0D1422]/60">
                 <div>
                   <h2 className="font-display text-base font-bold text-[#F1F5F9]">
@@ -218,9 +218,11 @@ export const ArmoryView: React.FC<ArmoryViewProps> = ({
 
               <AvatarPreview3D
                 avatar={{ ...profile.avatar, weaponId: inspectedId }}
+                quality={profile.quality}
+                renderEngine={profile.renderEngine}
                 weaponLevel={level}
                 previewAction={previewAct}
-                className="flex-1 min-h-[300px]"
+                className="flex-1 h-[clamp(240px,36dvh,360px)] lg:h-auto lg:min-h-[320px] landscape-preview-box"
               />
 
               <div className="p-5 border-t border-white/10 bg-[#0D1422] space-y-4">
@@ -321,7 +323,7 @@ export const ArmoryView: React.FC<ArmoryViewProps> = ({
             </section>
 
             {/* 12-Weapon Grid */}
-            <section className="lg:col-span-7 grid grid-cols-1 sm:grid-cols-2 gap-4 content-start">
+            <section className="lg:col-span-7 landscape-span-7 grid grid-cols-1 sm:grid-cols-2 gap-4 content-start">
               {filteredWeapons.map((w) => {
                 const unlocked = profile.unlockedWeapons.includes(w.id);
                 const equipped = profile.avatar.weaponId === w.id;

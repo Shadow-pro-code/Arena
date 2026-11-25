@@ -115,10 +115,10 @@ export const RewardsView: React.FC<RewardsViewProps> = ({
     (profile.gatheredResources.crystal || 0);
 
   return (
-    <main className="max-w-[1360px] mx-auto px-4 sm:px-6 py-6 sm:py-8 space-y-9">
-      <div className="flex flex-wrap items-end justify-between gap-4 border-b border-[#E6B85C]/20 pb-5">
+    <main className="ui-shell-container space-y-[var(--ui-section-gap)]">
+      <div className="flex flex-wrap items-end justify-between gap-4 border-b border-[#E6B85C]/20 pb-5 landscape-compact-header">
         <div>
-          <h1 className="font-display text-2xl sm:text-3xl font-extrabold text-[#F2F4F8]">
+          <h1 className="font-display ui-section-title font-extrabold text-[#F2F4F8]">
             عقود النقابة والمهام وسلسلة الوحوش
           </h1>
           <p className="text-sm text-[#94A3B8] mt-1">

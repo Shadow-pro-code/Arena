@@ -17,7 +17,59 @@ export type GameMode =
   | 'pvp_local'
   | 'pvp_online';
 
-export type GraphicsQuality = 'eco' | 'balanced' | 'high' | 'ultra' | 'mythic';
+export type GraphicsQuality = 'eco' | 'balanced' | 'high' | 'ultra' | 'mythic' | 'impossible';
+
+export type RenderEngineMode = 'auto' | 'canvas2d' | 'webgl';
+export type ResolvedRenderEngine = 'canvas2d' | 'webgl';
+
+export type KeyActionId =
+  | 'moveForward'
+  | 'moveBackward'
+  | 'moveLeft'
+  | 'moveRight'
+  | 'attack'
+  | 'heavy'
+  | 'jump'
+  | 'dodge'
+  | 'block'
+  | 'skill0'
+  | 'skill1'
+  | 'skill2'
+  | 'skill3'
+  | 'sprint'
+  | 'interact'
+  | 'map'
+  | 'camera'
+  | 'toggleHud'
+  | 'potion1'
+  | 'potion2'
+  | 'potion3';
+
+export type KeyBindingsConfig = Record<KeyActionId, string>;
+
+export type MobileLayoutPreset = 'standard' | 'compact' | 'spread';
+
+export interface HudWidgetVisibility {
+  radar: boolean;
+  mission: boolean;
+  biomeStrip: boolean;
+  fps: boolean;
+  controlsHint: boolean;
+  floatingDamage: boolean;
+  bossBar: boolean;
+}
+
+export interface HudCustomizationConfig {
+  zenMode: boolean;
+  hudScale: number;
+  hudOpacity: number;
+  cameraSensitivity?: number;
+  mobilePreset: MobileLayoutPreset;
+  mobileButtonsScale: number;
+  joystickOffset: { x: number; y: number };
+  actionsOffset: { x: number; y: number };
+  widgets: HudWidgetVisibility;
+}
 
 export type CameraViewMode =
   | 'third_person'
@@ -620,11 +672,14 @@ export interface PlayerProfile {
   quests: QuestProgress[];
   systemTheme: SystemTheme;
   quality: GraphicsQuality;
+  renderEngine: RenderEngineMode;
   cameraView: CameraViewMode;
   deviceMode: DeviceMode;
   landscapeLocked: boolean;
   soundEnabled: boolean;
   favoriteArena: ArenaId;
+  keyBindings: KeyBindingsConfig;
+  hudConfig: HudCustomizationConfig;
 }
 
 export interface MatchResult {

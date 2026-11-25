@@ -1,11 +1,14 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
+  ArrowUp,
   Briefcase,
   Camera,
   CheckCircle2,
   Coins,
   Compass,
   Cpu,
+  Eye,
+  EyeOff,
   Flame,
   Gem,
   Gift,
@@ -22,6 +25,7 @@ import {
   Play,
   RotateCw,
   Shield,
+  Sliders,
   Smartphone,
   Sparkles,
   Swords,
@@ -42,11 +46,15 @@ import type {
   DeviceMode,
   GameMode,
   GraphicsQuality,
+  HudCustomizationConfig,
+  KeyBindingsConfig,
   MatchResult,
   OnlineFighterSnapshot,
   OnlineRoomSummary,
   OverworldNodeKind,
   PlayerProfile,
+  RenderEngineMode,
+  ResolvedRenderEngine,
   RivalChampion,
   SecretBossDef,
   SystemTheme,
@@ -63,10 +71,19 @@ import {
   WORLD_EVENT_ZONES,
 } from '../data/gameCatalog';
 import { SoftwareRenderer3D } from '../engine/renderer3d';
+import { WebGLRenderer3D } from '../engine/webglRenderer3d';
+import { resolveRenderEngine } from '../engine/webglCapability';
 import { CombatSimulation, HudSnapshot } from '../engine/combatSimulation';
 import type { OnlineDamageEvent, OnlineVfxEvent } from '../hooks/useMultiplayerSocket';
 import { SystemChatPanel } from './SystemChatPanel';
+import { HudCustomizerModal } from './HudCustomizerModal';
 import { CHUNK_SIZE } from '../engine/worldStreamer';
+import { useAdaptiveUI } from '../hooks/useAdaptiveUI';
+import {
+  DEFAULT_HUD_CONFIG,
+  DEFAULT_KEY_BINDINGS,
+  formatKeyCodeLabel,
+} from '../data/controlDefaults';
 
 interface ArenaCombatViewProps {
   profile: PlayerProfile;
@@ -105,6 +122,11 @@ interface ArenaCombatViewProps {
     onVfx: ((ev: OnlineVfxEvent) => void) | null
   ) => void;
   onChangeQuality: (q: GraphicsQuality) => void;
+  onChangeRenderEngine?: (mode: RenderEngineMode) => void;
+  onChangeKeyBindings?: (next: KeyBindingsConfig) => void;
+  onResetKeyBindings?: () => void;
+  onChangeHudConfig?: (next: HudCustomizationConfig) => void;
+  onResetHudConfig?: () => void;
   onChangeCamera: (c: CameraViewMode) => void;
   onChangeDeviceMode: (d: DeviceMode) => void;
   onToggleLandscape?: (locked: boolean) => void;
@@ -146,7 +168,7 @@ const CAMERA_LABELS: Record<CameraViewMode, string> = {
   cinematic_free: 'سينمائي حر',
 };
 
-const QUALITY_CYCLE: GraphicsQuality[] = ['eco', 'balanced', 'high', 'ultra', 'mythic'];
+const QUALITY_CYCLE: GraphicsQuality[] = ['eco', 'balanced', 'high', 'ultra', 'mythic', 'impossible'];
 
 const QUALITY_LABELS: Record<GraphicsQuality, string> = {
   eco: 'اقتصادي',
@@ -154,9 +176,9 @@ const QUALITY_LABELS: Record<GraphicsQuality, string> = {
   high: 'عالي',
   ultra: 'فائق',
   mythic: 'أسطوري',
+  impossible: 'مستحيلة',
 };
 
-const SKILL_KEYS = ['[Q]', '[R]', '[Z]', '[X]'] as const;
 const SKILL_ACCENTS = ['#38BDF8', '#C084FC', '#10B981', '#F59E0B'] as const;
 
 export const ArenaCombatView: React.FC<ArenaCombatViewProps> = ({
@@ -181,6 +203,11 @@ export const ArenaCombatView: React.FC<ArenaCombatViewProps> = ({
   onOnlineVfxSend,
   onBindOnlineListeners,
   onChangeQuality,
+  onChangeRenderEngine,
+  onChangeKeyBindings,
+  onResetKeyBindings,
+  onChangeHudConfig,
+  onResetHudConfig,
   onChangeCamera,
   onChangeDeviceMode,
   onToggleLandscape,
@@ -204,22 +231,45 @@ export const ArenaCombatView: React.FC<ArenaCombatViewProps> = ({
   onExit,
 }) => {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const overlayCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const simRef = useRef<CombatSimulation | null>(null);
   const rendererRef = useRef<SoftwareRenderer3D | null>(null);
+  const webglRendererRef = useRef<WebGLRenderer3D | null>(null);
   const dragCamRef = useRef<{
     active: boolean;
-    lastAxis: number;
+    lastX: number;
+    lastY: number;
     moved: number;
     pointerType: string;
     button: number;
-  }>({ active: false, lastAxis: 0, moved: 0, pointerType: 'mouse', button: 0 });
+  }>({ active: false, lastX: 0, lastY: 0, moved: 0, pointerType: 'mouse', button: 0 });
+
+  const keyBindings = profile.keyBindings || DEFAULT_KEY_BINDINGS;
+  const hudConfig = profile.hudConfig || DEFAULT_HUD_CONFIG;
+  const keyBindingsRef = useRef(keyBindings);
+  keyBindingsRef.current = keyBindings;
+  const hudConfigRef = useRef(hudConfig);
+  hudConfigRef.current = hudConfig;
+
+  const [forcedFallbackEngine, setForcedFallbackEngine] = useState<'canvas2d' | null>(null);
+  const [engineToast, setEngineToast] = useState('');
+  const resolvedEngine: ResolvedRenderEngine =
+    forcedFallbackEngine ?? resolveRenderEngine(profile.renderEngine || 'auto');
+
+  useEffect(() => {
+    setForcedFallbackEngine(null);
+  }, [profile.renderEngine]);
 
   const joystickRef = useRef<HTMLDivElement | null>(null);
-  const [joyKnob, setJoyKnob] = useState<{ x: number; y: number; active: boolean }>({
-    x: 0,
-    y: 0,
-    active: false,
-  });
+  const joyKnobElRef = useRef<HTMLDivElement | null>(null);
+  const joyPointerIdRef = useRef<number | null>(null);
+  const camPointerIdRef = useRef<number | null>(null);
+
+  const setJoyKnobVisual = (x: number, y: number, active: boolean) => {
+    const knob = joyKnobElRef.current;
+    if (!knob) return;
+    knob.style.transform = `translate3d(${x.toFixed(1)}px, ${y.toFixed(1)}px, 0) scale(${active ? 1.06 : 1})`;
+  };
 
   const [paused, setPaused] = useState(false);
   const [matchResult, setMatchResult] = useState<MatchResult | null>(null);
@@ -227,6 +277,8 @@ export const ArenaCombatView: React.FC<ArenaCombatViewProps> = ({
   const [showWorldMap, setShowWorldMap] = useState(false);
   const [worldMapScope, setWorldMapScope] = useState<'kingdom' | 'continent'>('kingdom');
   const [showChatDrawer, setShowChatDrawer] = useState(false);
+  const [showCustomizer, setShowCustomizer] = useState(false);
+  const [showUtilityDrawer, setShowUtilityDrawer] = useState(false);
   const [activeNpcId, setActiveNpcId] = useState<string | null>(null);
   const [npcNotice, setNpcNotice] = useState('');
 
@@ -236,23 +288,22 @@ export const ArenaCombatView: React.FC<ArenaCombatViewProps> = ({
   activeNpcIdRef.current = activeNpcId;
   const showChatDrawerRef = useRef(showChatDrawer);
   showChatDrawerRef.current = showChatDrawer;
+  const showCustomizerRef = useRef(showCustomizer);
+  showCustomizerRef.current = showCustomizer;
+  const showUtilityDrawerRef = useRef(showUtilityDrawer);
+  showUtilityDrawerRef.current = showUtilityDrawer;
 
   const [landscapeMode, setLandscapeMode] = useState<boolean>(profile.landscapeLocked);
-  const [viewportSize, setViewportSize] = useState<{ w: number; h: number }>(() => {
-    if (typeof window === 'undefined') return { w: 1280, h: 720 };
-    const vv = window.visualViewport;
-    return {
-      w: Math.round(vv?.width || window.innerWidth),
-      h: Math.round(vv?.height || window.innerHeight),
-    };
+  const adaptive = useAdaptiveUI({
+    deviceMode: profile.deviceMode,
+    landscapeLocked: landscapeMode,
+    hudConfig,
   });
 
-  const isPortraitViewport = viewportSize.h > viewportSize.w;
-  const useCssLandscapeRotation = landscapeMode && isPortraitViewport;
+  const useCssLandscapeRotation = adaptive.useCssLandscapeRotation;
   const useCssLandscapeRef = useRef(useCssLandscapeRotation);
   useCssLandscapeRef.current = useCssLandscapeRotation;
-  const isCompactLandscape =
-    useCssLandscapeRotation || (viewportSize.h <= 520 && viewportSize.w >= viewportSize.h);
+  const isCompactLandscape = adaptive.isShortLandscape || useCssLandscapeRotation;
   const resizeCanvasFnRef = useRef<(() => void) | null>(null);
   const npcToastTimerRef = useRef<number | null>(null);
 
@@ -322,32 +373,25 @@ export const ArenaCombatView: React.FC<ArenaCombatViewProps> = ({
   });
 
   const isMobile = profile.deviceMode === 'mobile';
+  const showTouchControls = adaptive.showTouchControls;
   const anyOverlayOpen =
-    paused || showWorldMap || showChatDrawer || Boolean(activeNpcId) || Boolean(matchResult);
+    paused || showWorldMap || showChatDrawer || showCustomizer || Boolean(activeNpcId) || Boolean(matchResult);
+  const anyOverlayOpenRef = useRef(anyOverlayOpen);
+  anyOverlayOpenRef.current = anyOverlayOpen;
 
   // Pause simulation automatically when modal overlays are active
   useEffect(() => {
     if (simRef.current) {
       simRef.current.paused = anyOverlayOpen;
     }
+    if (anyOverlayOpen) {
+      setShowUtilityDrawer(false);
+    }
   }, [anyOverlayOpen]);
 
-  // Track exact pixel viewport size via visualViewport for immediate portrait/landscape fit
+  // Clean up fullscreen/orientation lock on unmount
   useEffect(() => {
-    const syncViewport = () => {
-      const vv = window.visualViewport;
-      const w = Math.round(vv?.width || window.innerWidth);
-      const h = Math.round(vv?.height || window.innerHeight);
-      setViewportSize((prev) => (prev.w === w && prev.h === h ? prev : { w, h }));
-    };
-    syncViewport();
-    window.addEventListener('resize', syncViewport);
-    window.addEventListener('orientationchange', syncViewport);
-    window.visualViewport?.addEventListener('resize', syncViewport);
     return () => {
-      window.removeEventListener('resize', syncViewport);
-      window.removeEventListener('orientationchange', syncViewport);
-      window.visualViewport?.removeEventListener('resize', syncViewport);
       try {
         (screen.orientation as { unlock?: () => void })?.unlock?.();
         if (document.fullscreenElement) {
@@ -364,7 +408,7 @@ export const ArenaCombatView: React.FC<ArenaCombatViewProps> = ({
     resizeCanvasFnRef.current?.();
     const raf = requestAnimationFrame(() => resizeCanvasFnRef.current?.());
     return () => cancelAnimationFrame(raf);
-  }, [useCssLandscapeRotation, viewportSize.w, viewportSize.h]);
+  }, [adaptive.useCssLandscapeRotation, adaptive.rawWidth, adaptive.rawHeight]);
 
   const handleToggleLandscape = async () => {
     const next = !landscapeMode;
@@ -392,21 +436,23 @@ export const ArenaCombatView: React.FC<ArenaCombatViewProps> = ({
     }
   };
 
-  // Sync live quality & camera changes straight into active simulation
+  // Sync live quality, camera, keybindings, and floating damage setting into active simulation
   useEffect(() => {
     if (simRef.current) {
       simRef.current.quality = profile.quality;
       simRef.current.cameraView = profile.cameraView;
+      simRef.current.setKeyBindings(keyBindings);
+      simRef.current.setShowFloatingDamage(hudConfig.widgets.floatingDamage);
     }
-  }, [profile.quality, profile.cameraView]);
+  }, [profile.quality, profile.cameraView, keyBindings, hudConfig.widgets.floatingDamage]);
 
-  // Reset virtual joystick when switching to desktop mode
+  // Reset virtual joystick when switching to desktop touch-off mode
   useEffect(() => {
-    if (!isMobile) {
+    if (!showTouchControls) {
       simRef.current?.setVirtualMove(0, 0);
-      setJoyKnob({ x: 0, y: 0, active: false });
+      setJoyKnobVisual(0, 0, false);
     }
-  }, [isMobile]);
+  }, [showTouchControls]);
 
   // Sync incoming online fighters snapshots
   useEffect(() => {
@@ -415,14 +461,41 @@ export const ArenaCombatView: React.FC<ArenaCombatViewProps> = ({
     }
   }, [mode, onlineFighters]);
 
-  // Initialize simulation & 60fps pure Canvas2D 3D loop
+  // Initialize simulation & Dual-Engine 3D Loop (WebGL 1/2 OR Canvas2D)
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
-    const ctx = canvas.getContext('2d', { alpha: false });
-    if (!ctx) return;
 
-    rendererRef.current = new SoftwareRenderer3D();
+    let activeWebGL: WebGLRenderer3D | null = null;
+    let overlayCtx: CanvasRenderingContext2D | null = null;
+    let swCtx: CanvasRenderingContext2D | null = null;
+    let effectiveEngine: ResolvedRenderEngine = resolvedEngine;
+
+    if (effectiveEngine === 'webgl') {
+      try {
+        activeWebGL = new WebGLRenderer3D(canvas, profile.quality, () => {
+          setEngineToast('تم التحويل للمحرك الخفيف مؤقتاً بعد فقدان سياق WebGL');
+          setForcedFallbackEngine('canvas2d');
+        });
+        webglRendererRef.current = activeWebGL;
+        rendererRef.current = null;
+        if (overlayCanvasRef.current) {
+          overlayCtx = overlayCanvasRef.current.getContext('2d');
+        }
+      } catch {
+        effectiveEngine = 'canvas2d';
+        setEngineToast('تعذّر تشغيل WebGL — يعمل المحرك الخفيف تلقائياً');
+        setForcedFallbackEngine('canvas2d');
+        return;
+      }
+    }
+
+    if (effectiveEngine === 'canvas2d') {
+      swCtx = canvas.getContext('2d', { alpha: false });
+      if (!swCtx) return;
+      rendererRef.current = new SoftwareRenderer3D();
+      webglRendererRef.current = null;
+    }
 
     const sim = new CombatSimulation({
       mode,
@@ -457,6 +530,8 @@ export const ArenaCombatView: React.FC<ArenaCombatViewProps> = ({
       },
       quality: profile.quality,
       cameraView: profile.cameraView,
+      keyBindings,
+      showFloatingDamage: hudConfig.widgets.floatingDamage,
       rivalChampion,
       localP2Avatar,
       onlineSelfId,
@@ -485,18 +560,36 @@ export const ArenaCombatView: React.FC<ArenaCombatViewProps> = ({
     const resize = () => {
       const rect = canvas.getBoundingClientRect();
       const q = simRef.current?.quality || 'balanced';
+      const baseW = Math.max(320, Math.floor(canvas.clientWidth || (useCssLandscapeRef.current ? rect.height : rect.width)));
+      const baseH = Math.max(200, Math.floor(canvas.clientHeight || (useCssLandscapeRef.current ? rect.width : rect.height)));
+
+      if (activeWebGL) {
+        activeWebGL.setSize(baseW, baseH);
+        const ov = overlayCanvasRef.current;
+        if (ov) {
+          const ovDpr = Math.min(window.devicePixelRatio || 1, 2);
+          const ovW = Math.max(320, Math.floor(baseW * ovDpr));
+          const ovH = Math.max(200, Math.floor(baseH * ovDpr));
+          if (ov.width !== ovW || ov.height !== ovH) {
+            ov.width = ovW;
+            ov.height = ovH;
+          }
+        }
+        return;
+      }
+
       const scale =
         q === 'eco'
           ? 0.72
           : q === 'balanced'
-            ? 1.0
+            ? Math.min(window.devicePixelRatio || 1, 1.18)
             : q === 'high'
               ? Math.min(window.devicePixelRatio || 1, 1.35)
               : q === 'ultra'
                 ? Math.min(window.devicePixelRatio || 1, 1.65)
-                : Math.min(window.devicePixelRatio || 1, 2.0);
-      const baseW = canvas.clientWidth || (useCssLandscapeRef.current ? rect.height : rect.width);
-      const baseH = canvas.clientHeight || (useCssLandscapeRef.current ? rect.width : rect.height);
+                : q === 'mythic'
+                  ? Math.min(window.devicePixelRatio || 1, 1.85)
+                  : Math.min(window.devicePixelRatio || 1, 2.0);
       const w = Math.max(360, Math.floor(baseW * scale));
       const h = Math.max(220, Math.floor(baseH * scale));
       if (canvas.width !== w || canvas.height !== h) {
@@ -506,15 +599,32 @@ export const ArenaCombatView: React.FC<ArenaCombatViewProps> = ({
     };
 
     resizeCanvasFnRef.current = resize;
-    const ro = new ResizeObserver(resize);
-    ro.observe(canvas);
+    let resizeRafId = 0;
+    const scheduleResize = () => {
+      if (resizeRafId) cancelAnimationFrame(resizeRafId);
+      resizeRafId = requestAnimationFrame(() => {
+        resizeRafId = 0;
+        if (!disposedLoop) resize();
+      });
+    };
+    const ro = new ResizeObserver(scheduleResize);
+    ro.observe(canvas.parentElement || canvas);
     resize();
 
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (['Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.code)) {
+      const kb = keyBindingsRef.current;
+      if (['Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', kb.jump].includes(e.code)) {
         e.preventDefault();
       }
       if (e.code === 'Escape') {
+        if (showUtilityDrawerRef.current) {
+          setShowUtilityDrawer(false);
+          return;
+        }
+        if (showCustomizerRef.current) {
+          setShowCustomizer(false);
+          return;
+        }
         if (showChatDrawerRef.current) {
           setShowChatDrawer(false);
           return;
@@ -530,7 +640,13 @@ export const ArenaCombatView: React.FC<ArenaCombatViewProps> = ({
         setPaused((prev) => !prev);
         return;
       }
-      if (e.code === 'KeyM' && mode === 'world_explore') {
+      if (showCustomizerRef.current) return;
+
+      if (e.code === kb.toggleHud) {
+        onChangeHudConfig?.({ ...hudConfigRef.current, zenMode: !hudConfigRef.current.zenMode });
+        return;
+      }
+      if (e.code === kb.map && mode === 'world_explore') {
         setActiveNpcId(null);
         setShowChatDrawer(false);
         setShowWorldMap((prev) => !prev);
@@ -538,7 +654,7 @@ export const ArenaCombatView: React.FC<ArenaCombatViewProps> = ({
       }
       if (showWorldMapRef.current || activeNpcIdRef.current || showChatDrawerRef.current) return;
 
-      if (e.code === 'KeyV') {
+      if (e.code === kb.camera) {
         const idx = CAMERA_CYCLE.indexOf(sim.cameraView);
         const nextView = CAMERA_CYCLE[(idx + 1) % CAMERA_CYCLE.length];
         onChangeCamera(nextView);
@@ -555,11 +671,15 @@ export const ArenaCombatView: React.FC<ArenaCombatViewProps> = ({
     window.addEventListener('keyup', handleKeyUp);
 
     let rafId = 0;
+    let scheduledFrame: { cancel: () => void } | null = null;
+    let disposedLoop = false;
     let lastTime = performance.now();
     let hudTimer = 0;
     let lastQuality = sim.quality;
 
-    const frame = (now: number) => {
+    const frame = () => {
+      if (disposedLoop) return;
+      const now = performance.now();
       const dt = (now - lastTime) / 1000;
       lastTime = now;
 
@@ -569,23 +689,44 @@ export const ArenaCombatView: React.FC<ArenaCombatViewProps> = ({
       }
 
       sim.step(dt);
-      rendererRef.current?.renderScene(ctx, canvas.width, canvas.height, sim.camera, sim.getRenderPayload());
+      const payload = sim.getRenderPayload();
+
+      if (activeWebGL) {
+        activeWebGL.renderScene(payload, sim.camera, overlayCtx);
+      } else if (swCtx) {
+        rendererRef.current?.renderScene(swCtx, canvas.width, canvas.height, sim.camera, payload);
+      }
 
       hudTimer += dt;
-      if (hudTimer >= 0.08) {
+      if (hudTimer >= 0.08 && !anyOverlayOpenRef.current) {
         hudTimer = 0;
         setHud(sim.getHudSnapshot());
       }
 
-      rafId = requestAnimationFrame(frame);
+      if (activeWebGL) {
+        scheduledFrame = activeWebGL.scheduleNextFrame(frame);
+      } else {
+        rafId = requestAnimationFrame(frame);
+      }
     };
 
-    rafId = requestAnimationFrame(frame);
+    if (activeWebGL) {
+      scheduledFrame = activeWebGL.scheduleNextFrame(frame);
+    } else {
+      rafId = requestAnimationFrame(frame);
+    }
 
     return () => {
+      disposedLoop = true;
       cancelAnimationFrame(rafId);
+      if (resizeRafId) cancelAnimationFrame(resizeRafId);
+      scheduledFrame?.cancel();
       ro.disconnect();
       sim.dispose();
+      if (activeWebGL) {
+        activeWebGL.dispose();
+        webglRendererRef.current = null;
+      }
       if (npcToastTimerRef.current) {
         window.clearTimeout(npcToastTimerRef.current);
         npcToastTimerRef.current = null;
@@ -597,7 +738,7 @@ export const ArenaCombatView: React.FC<ArenaCombatViewProps> = ({
       }
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mode, arenaId, sessionNonce]);
+  }, [mode, arenaId, sessionNonce, resolvedEngine]);
 
   const togglePause = () => {
     setPaused((prev) => !prev);
@@ -615,10 +756,12 @@ export const ArenaCombatView: React.FC<ArenaCombatViewProps> = ({
 
   const handleCanvasPointerDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
     if (anyOverlayOpen) return;
-    const axis = useCssLandscapeRef.current ? e.clientY : e.clientX;
+    if (camPointerIdRef.current !== null && e.pointerType === 'touch') return;
+    camPointerIdRef.current = e.pointerId;
     dragCamRef.current = {
       active: true,
-      lastAxis: axis,
+      lastX: e.clientX,
+      lastY: e.clientY,
       moved: 0,
       pointerType: e.pointerType,
       button: e.button,
@@ -633,17 +776,24 @@ export const ArenaCombatView: React.FC<ArenaCombatViewProps> = ({
   };
 
   const handleCanvasPointerMove = (e: React.PointerEvent<HTMLCanvasElement>) => {
-    if (!dragCamRef.current.active) return;
-    const axis = useCssLandscapeRef.current ? e.clientY : e.clientX;
-    const dx = axis - dragCamRef.current.lastAxis;
-    dragCamRef.current.lastAxis = axis;
-    dragCamRef.current.moved += Math.abs(dx);
-    if (Math.abs(dx) > 0.8) {
-      simRef.current?.rotateCameraYaw(dx * 0.0085);
+    if (!dragCamRef.current.active || camPointerIdRef.current !== e.pointerId) return;
+    const rawDx = e.clientX - dragCamRef.current.lastX;
+    const rawDy = e.clientY - dragCamRef.current.lastY;
+    dragCamRef.current.lastX = e.clientX;
+    dragCamRef.current.lastY = e.clientY;
+
+    const horizDelta = useCssLandscapeRef.current ? rawDy : rawDx;
+    const vertDelta = useCssLandscapeRef.current ? -rawDx : rawDy;
+    dragCamRef.current.moved += Math.abs(horizDelta) + Math.abs(vertDelta);
+
+    if (Math.abs(horizDelta) > 0.45 || Math.abs(vertDelta) > 0.45) {
+      const sens = hudConfigRef.current.cameraSensitivity ?? 1;
+      simRef.current?.rotateCamera(horizDelta * 0.0085 * sens, vertDelta * 0.0055 * sens);
     }
   };
 
-  const handleCanvasPointerUp = () => {
+  const handleCanvasPointerUp = (e: React.PointerEvent<HTMLCanvasElement>) => {
+    if (camPointerIdRef.current !== null && camPointerIdRef.current !== e.pointerId) return;
     if (
       dragCamRef.current.active &&
       (isMobile || dragCamRef.current.pointerType === 'touch') &&
@@ -651,7 +801,13 @@ export const ArenaCombatView: React.FC<ArenaCombatViewProps> = ({
     ) {
       simRef.current?.triggerPlayer1Action('attack');
     }
+    camPointerIdRef.current = null;
     dragCamRef.current.active = false;
+  };
+
+  const handleCanvasWheel = (e: React.WheelEvent<HTMLCanvasElement>) => {
+    if (anyOverlayOpen) return;
+    simRef.current?.zoomCamera(e.deltaY > 0 ? 0.08 : -0.08);
   };
 
   const updateJoystickFromPointer = (clientX: number, clientY: number) => {
@@ -660,7 +816,7 @@ export const ArenaCombatView: React.FC<ArenaCombatViewProps> = ({
     const rect = el.getBoundingClientRect();
     const cx = rect.left + rect.width / 2;
     const cy = rect.top + rect.height / 2;
-    const maxR = (useCssLandscapeRef.current ? rect.height : rect.width) * 0.36;
+    const maxR = Math.max(22, (useCssLandscapeRef.current ? rect.height : rect.width) * 0.36);
 
     const rawDx = clientX - cx;
     const rawDy = clientY - cy;
@@ -673,28 +829,49 @@ export const ArenaCombatView: React.FC<ArenaCombatViewProps> = ({
       dx = (dx / dist) * maxR;
       dy = (dy / dist) * maxR;
     }
-    setJoyKnob({ x: dx, y: dy, active: true });
-    simRef.current?.setVirtualMove(dx / maxR, dy / maxR);
+
+    const norm = Math.min(1, dist / maxR);
+    if (norm < 0.06) {
+      setJoyKnobVisual(dx * 0.4, dy * 0.4, true);
+      simRef.current?.setVirtualMove(0, 0);
+      return;
+    }
+
+    const rescaled = Math.pow((norm - 0.06) / 0.94, 1.05);
+    const inv = dist > 0 ? rescaled / norm : 0;
+    setJoyKnobVisual(dx, dy, true);
+    simRef.current?.setVirtualMove((dx / maxR) * inv, (dy / maxR) * inv);
   };
 
   const handleJoyDown = (e: React.PointerEvent<HTMLDivElement>) => {
     e.stopPropagation();
-    e.currentTarget.setPointerCapture(e.pointerId);
+    joyPointerIdRef.current = e.pointerId;
+    try {
+      e.currentTarget.setPointerCapture(e.pointerId);
+    } catch {
+      // Ignore synthetic capture failures
+    }
     updateJoystickFromPointer(e.clientX, e.clientY);
   };
 
   const handleJoyMove = (e: React.PointerEvent<HTMLDivElement>) => {
-    if (!joyKnob.active) return;
+    if (joyPointerIdRef.current !== e.pointerId) return;
     e.stopPropagation();
     updateJoystickFromPointer(e.clientX, e.clientY);
   };
 
   const handleJoyEnd = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (joyPointerIdRef.current !== null && joyPointerIdRef.current !== e.pointerId) return;
     e.stopPropagation();
-    if (e.currentTarget.hasPointerCapture(e.pointerId)) {
-      e.currentTarget.releasePointerCapture(e.pointerId);
+    try {
+      if (e.currentTarget.hasPointerCapture(e.pointerId)) {
+        e.currentTarget.releasePointerCapture(e.pointerId);
+      }
+    } catch {
+      // Ignore synthetic release failures
     }
-    setJoyKnob({ x: 0, y: 0, active: false });
+    joyPointerIdRef.current = null;
+    setJoyKnobVisual(0, 0, false);
     simRef.current?.setVirtualMove(0, 0);
   };
 
@@ -725,22 +902,25 @@ export const ArenaCombatView: React.FC<ArenaCombatViewProps> = ({
     ? NPC_JOB_LIST.filter((j) => j.npcId === activeNpcDef.id)
     : [];
 
+  const useNarrowPortraitStack = adaptive.effectiveWidth < 560 && !isCompactLandscape;
+
   return (
     <div
+      data-landscape-compact={isCompactLandscape ? 'true' : undefined}
       style={
         useCssLandscapeRotation
           ? {
-              width: `${viewportSize.h}px`,
-              height: `${viewportSize.w}px`,
+              width: `${adaptive.effectiveWidth}px`,
+              height: `${adaptive.effectiveHeight}px`,
               transform: 'rotate(90deg)',
               transformOrigin: 'top left',
               position: 'fixed',
               top: 0,
-              left: `${viewportSize.w}px`,
+              left: `${adaptive.rawWidth}px`,
             }
           : {
-              width: `${viewportSize.w}px`,
-              height: `${viewportSize.h}px`,
+              width: '100vw',
+              height: '100dvh',
               position: 'fixed',
               top: 0,
               left: 0,
@@ -749,31 +929,84 @@ export const ArenaCombatView: React.FC<ArenaCombatViewProps> = ({
       className="z-40 bg-[#0A0F1A] select-none overflow-hidden touch-none"
       onContextMenu={(e) => e.preventDefault()}
     >
-      {/* Full-Viewport 3D Pure Canvas2D Stage */}
+      {/* Full-Viewport Dual-Engine 3D Stage (WebGL 1/2 OR Canvas2D) */}
       <canvas
+        key={`stage_${resolvedEngine}`}
         ref={canvasRef}
         onPointerDown={handleCanvasPointerDown}
         onPointerMove={handleCanvasPointerMove}
         onPointerUp={handleCanvasPointerUp}
         onPointerCancel={handleCanvasPointerUp}
-        className="w-full h-full block cursor-crosshair touch-none"
+        onWheel={handleCanvasWheel}
+        className="absolute inset-0 w-full h-full block cursor-crosshair touch-none"
       />
 
-      {/* Top HUD Layer — Slim, Contemporary Manhwa & Immediately Fitted to Portrait/Landscape */}
+      {resolvedEngine === 'webgl' && (
+        <canvas
+          ref={overlayCanvasRef}
+          className="pointer-events-none absolute inset-0 w-full h-full z-[1]"
+        />
+      )}
+
+      {/* Engine Failover Notice */}
+      {engineToast && (
+        <div className="pointer-events-none fixed top-14 inset-x-0 z-30 flex justify-center px-4">
+          <div className="bg-[#0B101D]/95 border border-amber-400/50 text-amber-200 px-3.5 py-1.5 rounded-xl text-xs font-bold shadow-lg flex items-center gap-2">
+            <span>{engineToast}</span>
+            <button
+              type="button"
+              onClick={() => setEngineToast('')}
+              className="pointer-events-auto text-slate-300 hover:text-white"
+            >
+              ×
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Zen Mode Persistent Restore Button */}
+      {hudConfig.zenMode && !anyOverlayOpen && (
+        <button
+          type="button"
+          onClick={() => onChangeHudConfig?.({ ...hudConfig, zenMode: false })}
+          title={`إظهار واجهة القتال (${formatKeyCodeLabel(keyBindings.toggleHud)})`}
+          className="absolute top-3 left-3 z-20 px-3 py-1.5 rounded-xl bg-[#0B101D]/92 border border-cyan-400/45 text-cyan-200 text-xs font-bold flex items-center gap-1.5 shadow-lg cursor-pointer"
+        >
+          <Eye className="w-3.5 h-3.5" />
+          <span>إظهار الواجهة</span>
+        </button>
+      )}
+
+      {/* Top HUD Layer — True mathematical CSS Grid centering on >=560px/landscape, non-overlapping Row-2 stack on narrow portrait */}
+      {!hudConfig.zenMode && (
       <div
-        className={`pointer-events-none absolute top-0 inset-x-0 z-10 flex items-start justify-between gap-1.5 sm:gap-2 ${
-          isCompactLandscape ? 'px-2 py-1.5' : 'px-2.5 py-2 sm:px-4 sm:py-3'
-        }`}
+        style={{
+          opacity: hudConfig.hudOpacity,
+          paddingTop: useCssLandscapeRotation ? '0.45rem' : 'max(0.45rem, var(--safe-top))',
+          paddingInlineStart: useCssLandscapeRotation ? 'max(0.65rem, var(--safe-top))' : 'max(0.5rem, var(--safe-left))',
+          paddingInlineEnd: useCssLandscapeRotation ? 'max(0.65rem, var(--safe-bottom))' : 'max(0.5rem, var(--safe-right))',
+        }}
+        className={`pointer-events-none absolute top-0 inset-x-0 z-10 grid items-start ${
+          useNarrowPortraitStack
+            ? 'grid-cols-2 gap-1.5 pb-1.5'
+            : 'grid-cols-[1fr_auto_1fr] gap-2'
+        } ${isCompactLandscape ? 'pb-1' : 'pb-2 sm:pb-3'}`}
       >
-        {/* Top-Right (in RTL): Slim Player Bar + Compact Mini-Radar (side-by-side in landscape) */}
+        {/* Top-Right (in RTL Col 1): Slim Player Bar + Compact Mini-Radar */}
         <div
-          className={`flex items-start shrink-0 ${
+          style={
+            adaptive.hudAutoScale !== 1
+              ? { transform: `scale(${adaptive.hudAutoScale})`, transformOrigin: 'top right' }
+              : undefined
+          }
+          className={`col-start-1 row-start-1 justify-self-start flex items-start shrink-0 ${
             isCompactLandscape ? 'flex-row gap-1.5' : 'flex-col gap-1.5'
           }`}
         >
           <div
-            className={`pointer-events-auto bg-[#0B101D]/88 backdrop-blur-md border border-[#E6B85C]/25 rounded-xl space-y-1 ${
-              isCompactLandscape ? 'px-2 py-1.5 w-36' : 'px-2.5 py-2 w-40 sm:w-60'
+            style={{ width: `${adaptive.playerCardWidthPx}px` }}
+            className={`pointer-events-auto bg-[#0B101D]/92 border border-[#E6B85C]/30 rounded-xl space-y-1 ${
+              isCompactLandscape ? 'px-2 py-1.5' : 'px-2.5 py-2'
             }`}
           >
             <div className="flex items-center justify-between text-[10px] sm:text-xs gap-1">
@@ -820,12 +1053,12 @@ export const ArenaCombatView: React.FC<ArenaCombatViewProps> = ({
           </div>
 
           {/* Compact Tactical / Zoomed Continent Mini-Radar */}
-          <div className="pointer-events-auto bg-[#0B101D]/85 backdrop-blur-md border border-[#38BDF8]/25 rounded-xl p-1 flex flex-col items-center gap-0.5">
+          {hudConfig.widgets.radar && (
+          <div className="pointer-events-auto bg-[#0B101D]/92 border border-[#38BDF8]/30 rounded-xl p-1 flex flex-col items-center gap-0.5">
             <svg
               viewBox={radarViewBox}
-              className={`${
-                isCompactLandscape ? 'w-12 h-12' : 'w-15 h-15 sm:w-22 sm:h-22'
-              } rounded-lg`}
+              style={{ width: `${adaptive.radarSizePx}px`, height: `${adaptive.radarSizePx}px` }}
+              className="rounded-lg"
               aria-label="خريطة الرادار التكتيكية"
             >
               <circle
@@ -1001,20 +1234,29 @@ export const ArenaCombatView: React.FC<ArenaCombatViewProps> = ({
                 className="w-full py-0.5 px-1.5 text-[10px] font-bold text-[#38BDF8] bg-[#101E33] hover:bg-[#162945] border border-[#38BDF8]/30 rounded flex items-center justify-center gap-1 cursor-pointer"
               >
                 <MapIcon className="w-3 h-3" />
-                <span>خريطة [M]</span>
+                <span>خريطة [{formatKeyCodeLabel(keyBindings.map)}]</span>
               </button>
             )}
           </div>
+          )}
         </div>
 
-        {/* Top-Center: Always-Visible Compact Arena / Overworld Status Strip */}
-        <div className="flex flex-col items-center gap-1 min-w-0 max-w-[36%] sm:max-w-md">
+        {/* Top-Center: Dead-Center Grid Track (or centered Row 2 on narrow portrait phones) */}
+        <div
+          style={{ maxWidth: `${adaptive.centerStripMaxPx}px` }}
+          className={`flex flex-col items-center gap-1 min-w-0 shrink ${
+            useNarrowPortraitStack
+              ? 'col-span-2 row-start-2 justify-self-center'
+              : 'col-start-2 row-start-1 justify-self-center'
+          }`}
+        >
+          {(hudConfig.widgets.biomeStrip || !hud.isOverworld) && (
           <div
-            className={`bg-[#0B101D]/88 backdrop-blur-md border border-[#E6B85C]/25 rounded-xl text-[#F1F5F9] flex items-center gap-1.5 whitespace-nowrap max-w-full ${
+            className={`bg-[#0B101D]/92 border border-[#E6B85C]/30 rounded-xl text-[#F1F5F9] flex items-center gap-1.5 whitespace-nowrap max-w-full ${
               isCompactLandscape ? 'px-2 py-1 text-[10px]' : 'px-2.5 sm:px-3.5 py-1.5 text-[11px] sm:text-xs'
             }`}
           >
-            <span className="font-display font-bold text-[#E6B85C] truncate max-w-[90px] sm:max-w-none">
+            <span className="font-display font-bold text-[#E6B85C] truncate max-w-[100px] sm:max-w-none">
               {hud.isOverworld ? hud.currentRegionName || displayMap.name : displayMap.name}
             </span>
             <span className="text-[#475569]">·</span>
@@ -1037,12 +1279,19 @@ export const ArenaCombatView: React.FC<ArenaCombatViewProps> = ({
                 موجة {hud.wave} · <strong className="text-[#E6B85C]">{hud.kills}</strong>
               </span>
             )}
-            <span className="hidden sm:inline text-[#475569]">·</span>
-            <span className="hidden sm:inline font-mono-num text-[#94A3B8]">{hud.fps} FPS</span>
+            {hudConfig.widgets.fps && (
+              <>
+                <span className="hidden sm:inline text-[#475569]">·</span>
+                <span className="hidden sm:inline font-mono-num text-[#94A3B8]">
+                  {hud.fps} FPS · {resolvedEngine === 'webgl' ? 'WebGL' : '2D'}
+                </span>
+              </>
+            )}
           </div>
+          )}
 
-          {hud.activeMission && !hud.isOverworld && (
-            <div className="bg-[#0B101D]/85 backdrop-blur-md border border-[#38BDF8]/30 rounded-lg px-2 py-0.5 flex items-center justify-between gap-2 text-[10px] sm:text-[11px] max-w-full">
+          {hudConfig.widgets.mission && hud.activeMission && !hud.isOverworld && (
+            <div className="bg-[#0B101D]/92 border border-[#38BDF8]/30 rounded-lg px-2 py-0.5 flex items-center justify-between gap-2 text-[10px] sm:text-[11px] max-w-full">
               <span className="flex items-center gap-1 text-[#E0F2FE] truncate">
                 <Target className="w-3 h-3 text-[#38BDF8] shrink-0" />
                 <span className="truncate">{hud.activeMission.title}</span>
@@ -1054,7 +1303,7 @@ export const ArenaCombatView: React.FC<ArenaCombatViewProps> = ({
           )}
 
           {hud.activeEventZoneName && (
-            <div className="bg-[#0B101D]/88 backdrop-blur-md border border-[#38BDF8]/45 rounded-lg px-2.5 py-0.5 flex items-center gap-2 text-[10px] sm:text-[11px] max-w-full">
+            <div className="bg-[#0B101D]/92 border border-[#38BDF8]/45 rounded-lg px-2.5 py-0.5 flex items-center gap-2 text-[10px] sm:text-[11px] max-w-full">
               <Sparkles className="w-3 h-3 text-[#38BDF8] shrink-0" />
               <span className="font-bold text-[#E0F2FE] truncate">{hud.activeEventZoneName}</span>
               {hud.activeEventProgress && (
@@ -1066,18 +1315,14 @@ export const ArenaCombatView: React.FC<ArenaCombatViewProps> = ({
           )}
 
           {hud.activeSecretBossName && !hud.bossName && (
-            <div className="bg-[#181028]/88 backdrop-blur-md border border-[#A855F7]/50 rounded-lg px-2.5 py-0.5 flex items-center gap-1.5 text-[10px] sm:text-[11px] max-w-full">
+            <div className="bg-[#181028]/92 border border-[#A855F7]/50 rounded-lg px-2.5 py-0.5 flex items-center gap-1.5 text-[10px] sm:text-[11px] max-w-full">
               <Flame className="w-3 h-3 text-[#E879F9] shrink-0" />
               <span className="font-bold text-[#F3E8FF] truncate">مزار زعيم سري: {hud.activeSecretBossName}</span>
             </div>
           )}
 
-          {hud.bossName && hud.bossHp !== undefined && hud.bossMaxHp && (
-            <div
-              className={`${
-                isCompactLandscape ? 'w-44' : 'w-48 sm:w-72'
-              } bg-[#0B101D]/85 backdrop-blur-md border border-[#F97316]/45 rounded-lg px-2 py-1 space-y-0.5`}
-            >
+          {hudConfig.widgets.bossBar && hud.bossName && hud.bossHp !== undefined && hud.bossMaxHp && (
+            <div className="w-full max-w-[240px] sm:max-w-[288px] bg-[#0B101D]/92 border border-[#F97316]/45 rounded-lg px-2 py-1 space-y-0.5">
               <div className="flex justify-between text-[10px] sm:text-[11px]">
                 <span className="font-display font-bold text-[#FB923C] truncate">{hud.bossName}</span>
                 <span className="font-mono-num text-[#FED7AA]">
@@ -1093,15 +1338,12 @@ export const ArenaCombatView: React.FC<ArenaCombatViewProps> = ({
             </div>
           )}
 
-          {(mode === 'pvp_ranked' || mode === 'pvp_local' || mode === 'unified_clash') &&
+          {hudConfig.widgets.bossBar &&
+            (mode === 'pvp_ranked' || mode === 'pvp_local' || mode === 'unified_clash') &&
             hud.opponentName &&
             hud.opponentHp !== undefined &&
             hud.opponentMaxHp && (
-              <div
-                className={`${
-                  isCompactLandscape ? 'w-40' : 'w-44 sm:w-68'
-                } bg-[#0B101D]/85 backdrop-blur-md border border-white/15 rounded-lg px-2 py-1 space-y-0.5`}
-              >
+              <div className="w-full max-w-[220px] sm:max-w-[272px] bg-[#0B101D]/92 border border-white/15 rounded-lg px-2 py-1 space-y-0.5">
                 <div className="flex justify-between text-[10px] sm:text-[11px]">
                   <span className="font-display font-bold text-[#F1F5F9] truncate">
                     {hud.opponentName}
@@ -1120,143 +1362,304 @@ export const ArenaCombatView: React.FC<ArenaCombatViewProps> = ({
             )}
         </div>
 
-        {/* Top-Left (in RTL): Full Utility Strip — Always Accessible on Mobile & Desktop */}
-        <div className="pointer-events-auto flex flex-wrap items-center justify-end gap-1 max-w-[38%] sm:max-w-none shrink-0">
-          <button
-            type="button"
-            onClick={() => onChangeDeviceMode(isMobile ? 'desktop' : 'mobile')}
-            title="تحويل وضع التحكم بين الهاتف والحاسوب"
-            className={`${
-              isCompactLandscape ? 'min-h-[32px] px-1.5 text-[10px]' : 'min-h-[34px] px-2 text-[11px] sm:text-xs'
-            } py-1 font-bold rounded-lg border flex items-center gap-1 whitespace-nowrap cursor-pointer backdrop-blur-md transition-colors ${
-              isMobile
-                ? 'bg-[#E6B85C] text-[#0A0F1A] border-[#FDE68A]/50'
-                : 'bg-[#0B101D]/85 text-[#F1F5F9] border-white/15 hover:bg-[#16223A]'
-            }`}
-          >
-            {isMobile ? <Smartphone className="w-3.5 h-3.5" /> : <Monitor className="w-3.5 h-3.5 text-[#E6B85C]" />}
-            <span className="hidden sm:inline">{isMobile ? 'هاتف' : 'حاسوب'}</span>
-          </button>
+        {/* Top-Left (in RTL Col 3 / Row 1 Col 2 on narrow portrait): Adaptive Utility & Customizer Strip */}
+        <div
+          style={
+            adaptive.hudAutoScale !== 1
+              ? { transform: `scale(${adaptive.hudAutoScale})`, transformOrigin: 'top left' }
+              : undefined
+          }
+          className={`pointer-events-auto relative flex items-center justify-end gap-1 shrink-0 row-start-1 justify-self-end ${
+            useNarrowPortraitStack ? 'col-start-2' : 'col-start-3'
+          }`}
+        >
+          {adaptive.topBarDensity === 'minimal_drawer' ? (
+            <>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowUtilityDrawer(false);
+                  setShowCustomizer(true);
+                }}
+                title="تخصيص الواجهة والأزرار والمحرك والجودة"
+                className="min-h-[32px] px-2 py-1 text-[10px] font-bold rounded-lg border flex items-center gap-1 whitespace-nowrap shrink-0 cursor-pointer bg-[#102036] hover:bg-[#183052] text-cyan-200 border-cyan-400/40"
+              >
+                <Sliders className="w-3.5 h-3.5 text-cyan-300" />
+                <span>تخصيص</span>
+              </button>
 
-          <button
-            type="button"
-            onClick={handleToggleLandscape}
-            title="فتح الشاشة بوضع أفقي وملء الشاشة"
-            className={`${
-              isCompactLandscape ? 'min-h-[32px] px-1.5 text-[10px]' : 'min-h-[34px] px-2 text-[11px] sm:text-xs'
-            } py-1 font-bold rounded-lg border flex items-center gap-1 whitespace-nowrap cursor-pointer backdrop-blur-md transition-colors ${
-              landscapeMode
-                ? 'bg-[#38BDF8] text-[#0A0F1A] border-[#BAE6FD]/60'
-                : 'bg-[#0B101D]/85 text-[#F1F5F9] border-white/15 hover:bg-[#16223A]'
-            }`}
-          >
-            {landscapeMode ? <Minimize2 className="w-3.5 h-3.5" /> : <Maximize2 className="w-3.5 h-3.5 text-[#38BDF8]" />}
-            <span className="hidden sm:inline">{landscapeMode ? 'إنهاء الأفقي' : 'أفقي'}</span>
-          </button>
+              <button
+                type="button"
+                onClick={() => setShowUtilityDrawer((v) => !v)}
+                aria-expanded={showUtilityDrawer}
+                title="أدوات العرض والكاميرا والتحكم"
+                className={`min-h-[32px] px-2 py-1 text-[10px] font-bold rounded-lg border flex items-center gap-1 whitespace-nowrap shrink-0 cursor-pointer ${
+                  showUtilityDrawer
+                    ? 'system-btn-primary'
+                    : 'bg-[#0B101D]/92 text-[#F1F5F9] border-white/15 hover:bg-[#16223A]'
+                }`}
+              >
+                <Cpu className="w-3.5 h-3.5 text-[#38BDF8]" />
+                <span>أدوات</span>
+              </button>
 
-          <button
-            type="button"
-            onClick={handleCycleCamera}
-            title={`الكاميرا: ${CAMERA_LABELS[profile.cameraView]}`}
-            className={`${
-              isCompactLandscape ? 'min-h-[32px] px-1.5 text-[10px]' : 'min-h-[34px] px-2 text-[11px] sm:text-xs'
-            } py-1 font-semibold text-[#F1F5F9] bg-[#0B101D]/85 hover:bg-[#16223A] backdrop-blur-md border border-white/10 rounded-lg flex items-center gap-1 whitespace-nowrap cursor-pointer`}
-          >
-            <Camera className="w-3.5 h-3.5 text-[#E6B85C]" />
-            <span className="hidden lg:inline">{CAMERA_LABELS[profile.cameraView]}</span>
-          </button>
+              <button
+                type="button"
+                onClick={togglePause}
+                title="إيقاف مؤقت (Esc)"
+                className="min-h-[32px] min-w-[32px] flex items-center justify-center p-1 text-[#F1F5F9] bg-[#0B101D]/92 hover:bg-[#16223A] border border-white/15 rounded-lg shrink-0 cursor-pointer"
+              >
+                {paused ? <Play className="w-3.5 h-3.5 text-[#E6B85C]" /> : <Pause className="w-3.5 h-3.5" />}
+              </button>
 
-          <button
-            type="button"
-            onClick={handleCycleQuality}
-            title={`الجودة: ${QUALITY_LABELS[profile.quality]}`}
-            className={`${
-              isCompactLandscape ? 'min-h-[32px] px-1.5 text-[10px]' : 'min-h-[34px] px-2 text-[11px] sm:text-xs'
-            } py-1 font-semibold text-[#F1F5F9] bg-[#0B101D]/85 hover:bg-[#16223A] backdrop-blur-md border border-white/10 rounded-lg flex items-center gap-1 whitespace-nowrap cursor-pointer`}
-          >
-            <Cpu className="w-3.5 h-3.5 text-[#38BDF8]" />
-            <span className="hidden lg:inline">{QUALITY_LABELS[profile.quality]}</span>
-          </button>
+              <button
+                type="button"
+                onClick={() => {
+                  if (mode === 'pvp_online') {
+                    simRef.current?.finishMatch(hud.scoreP1 > 0);
+                  } else {
+                    onExit();
+                  }
+                }}
+                title="خروج من الساحة"
+                className="min-h-[32px] px-2 py-1 text-[10px] font-bold text-[#FCA5A5] bg-[#24131A]/95 hover:bg-[#381A22] border border-[#EF4444]/40 rounded-lg flex items-center gap-1 whitespace-nowrap shrink-0 cursor-pointer"
+              >
+                <LogOut className="w-3.5 h-3.5" />
+              </button>
 
-          <button
-            type="button"
-            onClick={() => simRef.current?.rotateCameraYaw(Math.PI / 4)}
-            title="تدوير زاوية الكاميرا"
-            className={`${
-              isCompactLandscape ? 'min-h-[32px] min-w-[32px]' : 'min-h-[34px] min-w-[34px]'
-            } flex items-center justify-center p-1 text-[#F1F5F9] bg-[#0B101D]/85 hover:bg-[#16223A] backdrop-blur-md border border-white/10 rounded-lg cursor-pointer`}
-          >
-            <RotateCw className="w-3.5 h-3.5" />
-          </button>
+              {showUtilityDrawer && (
+                <div className="absolute top-full left-0 mt-1.5 w-52 max-w-[82vw] bg-[#0B101D]/96 border border-[#38BDF8]/40 rounded-xl p-2 shadow-2xl grid grid-cols-2 gap-1.5 z-30">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowUtilityDrawer(false);
+                      onChangeHudConfig?.({ ...hudConfig, zenMode: true });
+                    }}
+                    className="px-2 py-1.5 rounded-lg bg-[#131D32] hover:bg-[#1B2B49] border border-white/10 text-[11px] font-semibold text-[#F1F5F9] flex items-center gap-1.5 cursor-pointer"
+                  >
+                    <EyeOff className="w-3.5 h-3.5 text-slate-300 shrink-0" />
+                    <span className="truncate">إخفاء HUD</span>
+                  </button>
 
-          <button
-            type="button"
-            onClick={onToggleSound}
-            title="تبديل الصوت"
-            className={`${
-              isCompactLandscape ? 'min-h-[32px] min-w-[32px]' : 'min-h-[34px] min-w-[34px]'
-            } flex items-center justify-center p-1 text-[#F1F5F9] bg-[#0B101D]/85 hover:bg-[#16223A] backdrop-blur-md border border-white/10 rounded-lg cursor-pointer`}
-          >
-            {profile.soundEnabled ? <Volume2 className="w-3.5 h-3.5" /> : <VolumeX className="w-3.5 h-3.5" />}
-          </button>
+                  <button
+                    type="button"
+                    onClick={() => onChangeDeviceMode(isMobile ? 'desktop' : 'mobile')}
+                    className={`px-2 py-1.5 rounded-lg border text-[11px] font-bold flex items-center gap-1.5 cursor-pointer ${
+                      isMobile
+                        ? 'bg-[#E6B85C] text-[#0A0F1A] border-[#FDE68A]/50'
+                        : 'bg-[#131D32] text-[#F1F5F9] border-white/10'
+                    }`}
+                  >
+                    {isMobile ? <Smartphone className="w-3.5 h-3.5 shrink-0" /> : <Monitor className="w-3.5 h-3.5 text-[#E6B85C] shrink-0" />}
+                    <span className="truncate">{isMobile ? 'هاتف' : 'حاسوب'}</span>
+                  </button>
 
-          {onSendChat && (
-            <button
-              type="button"
-              onClick={() => setShowChatDrawer((prev) => !prev)}
-              title="دردشة العالم والغرفة الحية"
-              className={`${
-                isCompactLandscape ? 'min-h-[32px] min-w-[32px] px-1.5 text-[10px]' : 'min-h-[34px] min-w-[34px] px-2 text-[11px]'
-              } py-1 font-bold rounded-lg border flex items-center justify-center gap-1 cursor-pointer backdrop-blur-md transition-colors ${
-                showChatDrawer
-                  ? 'system-btn-primary'
-                  : 'bg-[#0B101D]/85 text-[#38BDF8] hover:bg-[#16223A] border-white/10'
-              }`}
-            >
-              <MessageSquare className="w-3.5 h-3.5" />
-              <span className="hidden lg:inline">الدردشة</span>
-            </button>
+                  <button
+                    type="button"
+                    onClick={handleToggleLandscape}
+                    className={`px-2 py-1.5 rounded-lg border text-[11px] font-bold flex items-center gap-1.5 cursor-pointer ${
+                      landscapeMode
+                        ? 'bg-[#38BDF8] text-[#0A0F1A] border-[#BAE6FD]/60'
+                        : 'bg-[#131D32] text-[#F1F5F9] border-white/10'
+                    }`}
+                  >
+                    {landscapeMode ? <Minimize2 className="w-3.5 h-3.5 shrink-0" /> : <Maximize2 className="w-3.5 h-3.5 text-[#38BDF8] shrink-0" />}
+                    <span className="truncate">{landscapeMode ? 'إنهاء أفقي' : 'وضع أفقي'}</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={handleCycleCamera}
+                    className="px-2 py-1.5 rounded-lg bg-[#131D32] hover:bg-[#1B2B49] border border-white/10 text-[11px] font-semibold text-[#F1F5F9] flex items-center gap-1.5 cursor-pointer"
+                  >
+                    <Camera className="w-3.5 h-3.5 text-[#E6B85C] shrink-0" />
+                    <span className="truncate">{CAMERA_LABELS[profile.cameraView]}</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={handleCycleQuality}
+                    className="px-2 py-1.5 rounded-lg bg-[#131D32] hover:bg-[#1B2B49] border border-white/10 text-[11px] font-semibold text-[#F1F5F9] flex items-center gap-1.5 cursor-pointer"
+                  >
+                    <Cpu className="w-3.5 h-3.5 text-[#38BDF8] shrink-0" />
+                    <span className="truncate">{QUALITY_LABELS[profile.quality]}</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => simRef.current?.rotateCamera(Math.PI / 4, 0)}
+                    className="px-2 py-1.5 rounded-lg bg-[#131D32] hover:bg-[#1B2B49] border border-white/10 text-[11px] font-semibold text-[#F1F5F9] flex items-center gap-1.5 cursor-pointer"
+                  >
+                    <RotateCw className="w-3.5 h-3.5 shrink-0" />
+                    <span className="truncate">تدوير 45°</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={onToggleSound}
+                    className="px-2 py-1.5 rounded-lg bg-[#131D32] hover:bg-[#1B2B49] border border-white/10 text-[11px] font-semibold text-[#F1F5F9] flex items-center gap-1.5 cursor-pointer"
+                  >
+                    {profile.soundEnabled ? <Volume2 className="w-3.5 h-3.5 shrink-0" /> : <VolumeX className="w-3.5 h-3.5 shrink-0" />}
+                    <span className="truncate">{profile.soundEnabled ? 'كتم' : 'تفعيل'}</span>
+                  </button>
+
+                  {onSendChat && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowUtilityDrawer(false);
+                        setShowChatDrawer((prev) => !prev);
+                      }}
+                      className="px-2 py-1.5 rounded-lg bg-[#131D32] hover:bg-[#1B2B49] border border-white/10 text-[11px] font-semibold text-[#38BDF8] flex items-center gap-1.5 cursor-pointer"
+                    >
+                      <MessageSquare className="w-3.5 h-3.5 shrink-0" />
+                      <span className="truncate">الدردشة</span>
+                    </button>
+                  )}
+                </div>
+              )}
+            </>
+          ) : (
+            <div className="flex flex-wrap items-center justify-end gap-1">
+              <button
+                type="button"
+                onClick={() => setShowCustomizer(true)}
+                title="تخصيص الواجهة والأزرار والمحرك والجودة"
+                className="min-h-[34px] px-2 py-1 text-[11px] sm:text-xs font-bold rounded-lg border flex items-center gap-1 whitespace-nowrap shrink-0 cursor-pointer bg-[#102036] hover:bg-[#183052] text-cyan-200 border-cyan-400/40"
+              >
+                <Sliders className="w-3.5 h-3.5 text-cyan-300" />
+                <span>تخصيص</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => onChangeHudConfig?.({ ...hudConfig, zenMode: true })}
+                title={`إخفاء الواجهة (${formatKeyCodeLabel(keyBindings.toggleHud)})`}
+                className="min-h-[34px] min-w-[34px] flex items-center justify-center p-1 text-[#F1F5F9] bg-[#0B101D]/92 hover:bg-[#16223A] border border-white/15 rounded-lg shrink-0 cursor-pointer"
+              >
+                <EyeOff className="w-3.5 h-3.5 text-slate-300" />
+              </button>
+
+              <button
+                type="button"
+                onClick={() => onChangeDeviceMode(isMobile ? 'desktop' : 'mobile')}
+                title="تحويل وضع التحكم بين الهاتف والحاسوب"
+                className={`min-h-[34px] px-2 py-1 text-[11px] sm:text-xs font-bold rounded-lg border flex items-center gap-1 whitespace-nowrap shrink-0 cursor-pointer transition-colors ${
+                  isMobile
+                    ? 'bg-[#E6B85C] text-[#0A0F1A] border-[#FDE68A]/50'
+                    : 'bg-[#0B101D]/92 text-[#F1F5F9] border-white/15 hover:bg-[#16223A]'
+                }`}
+              >
+                {isMobile ? <Smartphone className="w-3.5 h-3.5" /> : <Monitor className="w-3.5 h-3.5 text-[#E6B85C]" />}
+                {adaptive.topBarDensity === 'full' && <span>{isMobile ? 'هاتف' : 'حاسوب'}</span>}
+              </button>
+
+              <button
+                type="button"
+                onClick={handleToggleLandscape}
+                title="فتح الشاشة بوضع أفقي وملء الشاشة"
+                className={`min-h-[34px] px-2 py-1 text-[11px] sm:text-xs font-bold rounded-lg border flex items-center gap-1 whitespace-nowrap shrink-0 cursor-pointer transition-colors ${
+                  landscapeMode
+                    ? 'bg-[#38BDF8] text-[#0A0F1A] border-[#BAE6FD]/60'
+                    : 'bg-[#0B101D]/92 text-[#F1F5F9] border-white/15 hover:bg-[#16223A]'
+                }`}
+              >
+                {landscapeMode ? <Minimize2 className="w-3.5 h-3.5" /> : <Maximize2 className="w-3.5 h-3.5 text-[#38BDF8]" />}
+                {adaptive.topBarDensity === 'full' && <span>{landscapeMode ? 'إنهاء الأفقي' : 'أفقي'}</span>}
+              </button>
+
+              <button
+                type="button"
+                onClick={handleCycleCamera}
+                title={`الكاميرا: ${CAMERA_LABELS[profile.cameraView]}`}
+                className="min-h-[34px] px-2 py-1 text-[11px] sm:text-xs font-semibold text-[#F1F5F9] bg-[#0B101D]/92 hover:bg-[#16223A] border border-white/15 rounded-lg flex items-center gap-1 whitespace-nowrap shrink-0 cursor-pointer"
+              >
+                <Camera className="w-3.5 h-3.5 text-[#E6B85C]" />
+                {adaptive.topBarDensity === 'full' && <span className="hidden lg:inline">{CAMERA_LABELS[profile.cameraView]}</span>}
+              </button>
+
+              <button
+                type="button"
+                onClick={handleCycleQuality}
+                title={`الجودة: ${QUALITY_LABELS[profile.quality]}`}
+                className="min-h-[34px] px-2 py-1 text-[11px] sm:text-xs font-semibold text-[#F1F5F9] bg-[#0B101D]/92 hover:bg-[#16223A] border border-white/15 rounded-lg flex items-center gap-1 whitespace-nowrap shrink-0 cursor-pointer"
+              >
+                <Cpu className="w-3.5 h-3.5 text-[#38BDF8]" />
+                {adaptive.topBarDensity === 'full' && <span className="hidden lg:inline">{QUALITY_LABELS[profile.quality]}</span>}
+              </button>
+
+              <button
+                type="button"
+                onClick={() => simRef.current?.rotateCamera(Math.PI / 4, 0)}
+                title="تدوير زاوية الكاميرا"
+                className="min-h-[34px] min-w-[34px] flex items-center justify-center p-1 text-[#F1F5F9] bg-[#0B101D]/92 hover:bg-[#16223A] border border-white/15 rounded-lg shrink-0 cursor-pointer"
+              >
+                <RotateCw className="w-3.5 h-3.5" />
+              </button>
+
+              <button
+                type="button"
+                onClick={onToggleSound}
+                title="تبديل الصوت"
+                className="min-h-[34px] min-w-[34px] flex items-center justify-center p-1 text-[#F1F5F9] bg-[#0B101D]/92 hover:bg-[#16223A] border border-white/15 rounded-lg shrink-0 cursor-pointer"
+              >
+                {profile.soundEnabled ? <Volume2 className="w-3.5 h-3.5" /> : <VolumeX className="w-3.5 h-3.5" />}
+              </button>
+
+              {onSendChat && (
+                <button
+                  type="button"
+                  onClick={() => setShowChatDrawer((prev) => !prev)}
+                  title="دردشة العالم والغرفة الحية"
+                  className={`min-h-[34px] min-w-[34px] px-2 py-1 text-[11px] font-bold rounded-lg border flex items-center justify-center gap-1 shrink-0 cursor-pointer transition-colors ${
+                    showChatDrawer
+                      ? 'system-btn-primary'
+                      : 'bg-[#0B101D]/92 text-[#38BDF8] hover:bg-[#16223A] border-white/15'
+                  }`}
+                >
+                  <MessageSquare className="w-3.5 h-3.5" />
+                  {adaptive.topBarDensity === 'full' && <span className="hidden lg:inline">الدردشة</span>}
+                </button>
+              )}
+
+              <button
+                type="button"
+                onClick={togglePause}
+                title="إيقاف مؤقت (Esc)"
+                className="min-h-[34px] min-w-[34px] flex items-center justify-center p-1 text-[#F1F5F9] bg-[#0B101D]/92 hover:bg-[#16223A] border border-white/15 rounded-lg shrink-0 cursor-pointer"
+              >
+                {paused ? <Play className="w-3.5 h-3.5 text-[#E6B85C]" /> : <Pause className="w-3.5 h-3.5" />}
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  if (mode === 'pvp_online') {
+                    simRef.current?.finishMatch(hud.scoreP1 > 0);
+                  } else {
+                    onExit();
+                  }
+                }}
+                title="خروج من الساحة"
+                className="min-h-[34px] px-2.5 py-1 text-[11px] sm:text-xs font-bold text-[#FCA5A5] bg-[#24131A]/95 hover:bg-[#381A22] border border-[#EF4444]/40 rounded-lg flex items-center gap-1 whitespace-nowrap shrink-0 cursor-pointer"
+              >
+                <LogOut className="w-3.5 h-3.5" />
+                <span>خروج</span>
+              </button>
+            </div>
           )}
-
-          <button
-            type="button"
-            onClick={togglePause}
-            title="إيقاف مؤقت (Esc)"
-            className={`${
-              isCompactLandscape ? 'min-h-[32px] min-w-[32px]' : 'min-h-[34px] min-w-[34px]'
-            } flex items-center justify-center p-1 text-[#F1F5F9] bg-[#0B101D]/85 hover:bg-[#16223A] backdrop-blur-md border border-white/10 rounded-lg cursor-pointer`}
-          >
-            {paused ? <Play className="w-3.5 h-3.5 text-[#E6B85C]" /> : <Pause className="w-3.5 h-3.5" />}
-          </button>
-
-          <button
-            type="button"
-            onClick={() => {
-              if (mode === 'pvp_online') {
-                simRef.current?.finishMatch(hud.scoreP1 > 0);
-              } else {
-                onExit();
-              }
-            }}
-            title="خروج من الساحة"
-            className={`${
-              isCompactLandscape ? 'min-h-[32px] px-2 text-[10px]' : 'min-h-[34px] px-2.5 text-[11px] sm:text-xs'
-            } py-1 font-bold text-[#FCA5A5] bg-[#24131A]/90 hover:bg-[#381A22] border border-[#EF4444]/35 rounded-lg flex items-center gap-1 whitespace-nowrap cursor-pointer`}
-          >
-            <LogOut className="w-3.5 h-3.5" />
-            <span className="hidden sm:inline">خروج</span>
-          </button>
         </div>
       </div>
+      )}
 
       {/* Peaceful NPC Dialogue Toast */}
       {hud.npcDialogue && !matchResult && !activeNpcId && (
         <div
           className={`pointer-events-none absolute inset-x-0 z-20 flex justify-center px-4 ${
-            isCompactLandscape ? 'top-12' : 'top-16 sm:top-20'
+            isCompactLandscape ? 'top-12' : useNarrowPortraitStack ? 'top-28' : 'top-16 sm:top-20'
           }`}
         >
-          <div className="max-w-lg bg-[#0B101D]/92 backdrop-blur-md border border-[#10B981]/50 rounded-xl px-3.5 py-2 text-center shadow-lg">
+          <div className="max-w-lg bg-[#0B101D]/95 border border-[#10B981]/50 rounded-xl px-3.5 py-2 text-center shadow-lg">
             <p className="font-display text-xs sm:text-sm font-bold text-[#A7F3D0]">
               {hud.npcDialogue}
             </p>
@@ -1268,10 +1671,10 @@ export const ArenaCombatView: React.FC<ArenaCombatViewProps> = ({
       {(hud.bannerText || koAnnouncement) && !matchResult && (
         <div
           className={`pointer-events-none absolute inset-x-0 z-10 flex justify-center px-4 ${
-            isCompactLandscape ? 'top-16' : 'top-24 sm:top-28'
+            isCompactLandscape ? 'top-16' : useNarrowPortraitStack ? 'top-32' : 'top-24 sm:top-28'
           }`}
         >
-          <div className="bg-[#0B101D]/85 backdrop-blur-md border border-[#E6B85C]/50 px-4 py-1.5 rounded-xl font-display text-xs sm:text-base font-bold text-[#FEF3C7] text-center shadow-lg">
+          <div className="bg-[#0B101D]/92 border border-[#E6B85C]/50 px-4 py-1.5 rounded-xl font-display text-xs sm:text-base font-bold text-[#FEF3C7] text-center shadow-lg">
             {koAnnouncement || hud.bannerText}
           </div>
         </div>
@@ -1281,7 +1684,7 @@ export const ArenaCombatView: React.FC<ArenaCombatViewProps> = ({
       {hud.nearbyInteractable && !anyOverlayOpen && (
         <div
           className={`pointer-events-none absolute inset-x-0 z-20 flex justify-center px-4 ${
-            isCompactLandscape ? 'bottom-3' : isMobile ? 'bottom-40' : 'bottom-20'
+            isCompactLandscape ? 'bottom-2.5' : showTouchControls ? 'bottom-44' : 'bottom-20'
           }`}
         >
           <button
@@ -1303,7 +1706,7 @@ export const ArenaCombatView: React.FC<ArenaCombatViewProps> = ({
                 </div>
               )}
             </div>
-            {!isMobile && (
+            {!showTouchControls && (
               <span className="font-mono-num text-xs font-extrabold bg-[#0A0F1A]/15 px-2 py-0.5 rounded">
                 [G]
               </span>
@@ -1312,13 +1715,26 @@ export const ArenaCombatView: React.FC<ArenaCombatViewProps> = ({
         </div>
       )}
 
-      {/* MOBILE MODE: Ergonomic 360° Joystick + Labeled Manhwa 4-Skill Command Deck */}
-      {isMobile && !anyOverlayOpen && (
+      {/* TOUCH / MOBILE MODE: Adaptive Anti-Collision 360° Joystick + 4-Skill Deck + Jump */}
+      {showTouchControls && !anyOverlayOpen && !hudConfig.zenMode && (
         <>
-          {/* Right Thumb: Consumables + Sprint/Map (Overworld) + 360° Analog Joystick */}
+          {/* Right Thumb: Consumables + Sprint/Map + 360° Analog Joystick */}
           <div
-            className={`absolute z-20 flex flex-col items-end gap-1 ${
-              isCompactLandscape ? 'bottom-2 right-2.5' : 'bottom-3 right-3 gap-1.5'
+            onPointerDown={(e) => e.stopPropagation()}
+            onPointerMove={(e) => e.stopPropagation()}
+            onPointerUp={(e) => e.stopPropagation()}
+            style={{
+              opacity: hudConfig.hudOpacity,
+              transform:
+                adaptive.touchDeckAutoScale !== 1 || hudConfig.joystickOffset.x !== 0 || hudConfig.joystickOffset.y !== 0
+                  ? `translate(${hudConfig.joystickOffset.x}px, ${hudConfig.joystickOffset.y}px) scale(${adaptive.touchDeckAutoScale})`
+                  : undefined,
+              transformOrigin: 'bottom right',
+              bottom: useCssLandscapeRotation ? '0.5rem' : 'max(0.5rem, var(--safe-bottom))',
+              right: useCssLandscapeRotation ? 'max(0.65rem, var(--safe-top))' : 'max(0.5rem, var(--safe-right))',
+            }}
+            className={`absolute z-20 flex flex-col items-end touch-none ${
+              hudConfig.mobilePreset === 'spread' ? 'gap-2' : 'gap-1'
             }`}
           >
             <div className="flex items-center gap-1">
@@ -1330,9 +1746,7 @@ export const ArenaCombatView: React.FC<ArenaCombatViewProps> = ({
                   simRef.current?.triggerConsumable('elixir_heal');
                 }}
                 aria-label="جرعة الشفاء"
-                className={`${
-                  isCompactLandscape ? 'min-w-[34px] min-h-[34px] px-1' : 'min-w-[40px] min-h-[40px] px-1.5'
-                } rounded-xl bg-[#0B101D]/88 border border-[#10B981]/50 disabled:opacity-35 text-[#10B981] flex flex-col items-center justify-center text-[9px] font-bold`}
+                className="min-w-[34px] min-h-[34px] px-1 rounded-xl bg-[#0B101D]/92 border border-[#10B981]/50 disabled:opacity-35 text-[#10B981] flex flex-col items-center justify-center text-[9px] font-bold"
               >
                 <Heart className="w-3.5 h-3.5" />
                 <span className="font-mono-num">{hud.consumables.elixir_heal}</span>
@@ -1345,9 +1759,7 @@ export const ArenaCombatView: React.FC<ArenaCombatViewProps> = ({
                   simRef.current?.triggerConsumable('scroll_energy');
                 }}
                 aria-label="لفيفة الطاقة"
-                className={`${
-                  isCompactLandscape ? 'min-w-[34px] min-h-[34px] px-1' : 'min-w-[40px] min-h-[40px] px-1.5'
-                } rounded-xl bg-[#0B101D]/88 border border-[#38BDF8]/50 disabled:opacity-35 text-[#38BDF8] flex flex-col items-center justify-center text-[9px] font-bold`}
+                className="min-w-[34px] min-h-[34px] px-1 rounded-xl bg-[#0B101D]/92 border border-[#38BDF8]/50 disabled:opacity-35 text-[#38BDF8] flex flex-col items-center justify-center text-[9px] font-bold"
               >
                 <Sparkles className="w-3.5 h-3.5" />
                 <span className="font-mono-num">{hud.consumables.scroll_energy}</span>
@@ -1360,46 +1772,38 @@ export const ArenaCombatView: React.FC<ArenaCombatViewProps> = ({
                   simRef.current?.triggerConsumable('tonic_fury');
                 }}
                 aria-label="إكسير الغضب"
-                className={`${
-                  isCompactLandscape ? 'min-w-[34px] min-h-[34px] px-1' : 'min-w-[40px] min-h-[40px] px-1.5'
-                } rounded-xl bg-[#0B101D]/88 border border-[#E6B85C]/50 disabled:opacity-35 text-[#E6B85C] flex flex-col items-center justify-center text-[9px] font-bold`}
+                className="min-w-[34px] min-h-[34px] px-1 rounded-xl bg-[#0B101D]/92 border border-[#E6B85C]/50 disabled:opacity-35 text-[#E6B85C] flex flex-col items-center justify-center text-[9px] font-bold"
               >
                 <Flame className="w-3.5 h-3.5" />
                 <span className="font-mono-num">{hud.consumables.tonic_fury}</span>
               </button>
-              {hud.isOverworld && (
-                <>
-                  <button
-                    type="button"
-                    onPointerDown={(e) => {
-                      e.stopPropagation();
-                      simRef.current?.triggerPlayer1Action('sprint');
-                    }}
-                    className={`${
-                      isCompactLandscape ? 'min-w-[34px] min-h-[34px] px-1.5' : 'min-w-[40px] min-h-[40px] px-1.5'
-                    } rounded-xl border flex flex-col items-center justify-center text-[9px] font-bold ${
-                      hud.sprintActive
-                        ? 'bg-[#38BDF8] text-[#0A0F1A] border-[#BAE6FD]'
-                        : 'bg-[#0B101D]/88 text-[#38BDF8] border-[#38BDF8]/40'
-                    }`}
-                  >
-                    <Wind className="w-3.5 h-3.5" />
-                    <span>ركض</span>
-                  </button>
-                  {isCompactLandscape && (
-                    <button
-                      type="button"
-                      onPointerDown={(e) => {
-                        e.stopPropagation();
-                        setShowWorldMap(true);
-                      }}
-                      className="min-w-[34px] min-h-[34px] px-1.5 rounded-xl border border-[#38BDF8]/45 bg-[#102036]/90 text-[#38BDF8] flex flex-col items-center justify-center text-[9px] font-bold"
-                    >
-                      <MapIcon className="w-3.5 h-3.5" />
-                      <span>خريطة</span>
-                    </button>
-                  )}
-                </>
+              <button
+                type="button"
+                onPointerDown={(e) => {
+                  e.stopPropagation();
+                  simRef.current?.triggerPlayer1Action('sprint');
+                }}
+                className={`min-w-[34px] min-h-[34px] px-1.5 rounded-xl border flex flex-col items-center justify-center text-[9px] font-bold ${
+                  hud.sprintActive
+                    ? 'bg-[#38BDF8] text-[#0A0F1A] border-[#BAE6FD]'
+                    : 'bg-[#0B101D]/92 text-[#38BDF8] border-[#38BDF8]/40'
+                }`}
+              >
+                <Wind className="w-3.5 h-3.5" />
+                <span>ركض</span>
+              </button>
+              {hud.isOverworld && isCompactLandscape && (
+                <button
+                  type="button"
+                  onPointerDown={(e) => {
+                    e.stopPropagation();
+                    setShowWorldMap(true);
+                  }}
+                  className="min-w-[34px] min-h-[34px] px-1.5 rounded-xl border border-[#38BDF8]/45 bg-[#102036] text-[#38BDF8] flex flex-col items-center justify-center text-[9px] font-bold"
+                >
+                  <MapIcon className="w-3.5 h-3.5" />
+                  <span>خريطة</span>
+                </button>
               )}
             </div>
 
@@ -1409,30 +1813,44 @@ export const ArenaCombatView: React.FC<ArenaCombatViewProps> = ({
               onPointerMove={handleJoyMove}
               onPointerUp={handleJoyEnd}
               onPointerCancel={handleJoyEnd}
-              className={`relative rounded-full bg-[#0B101D]/65 backdrop-blur-sm border-2 border-[#E6B85C]/35 flex items-center justify-center touch-none cursor-grab active:cursor-grabbing ${
-                isCompactLandscape ? 'w-22 h-22' : 'w-28 h-28 sm:w-32 sm:h-32'
-              }`}
+              style={{ width: `${adaptive.joystickSizePx}px`, height: `${adaptive.joystickSizePx}px` }}
+              className="relative rounded-full bg-[#0B101D]/82 border-2 border-[#E6B85C]/40 flex items-center justify-center touch-none cursor-grab active:cursor-grabbing"
             >
               <div className="absolute inset-3 rounded-full border border-white/10 pointer-events-none" />
               <div
-                className={`${
-                  isCompactLandscape ? 'w-9 h-9' : 'w-11 h-11 sm:w-12 sm:h-12'
-                } rounded-full bg-[#E6B85C]/95 border-2 border-[#FEF3C7] shadow-lg pointer-events-none transition-transform duration-75`}
-                style={{
-                  transform: `translate(${joyKnob.x}px, ${joyKnob.y}px)`,
-                }}
+                ref={joyKnobElRef}
+                className="w-9 h-9 sm:w-10 sm:h-10 rounded-full bg-[#E6B85C]/95 border-2 border-[#FEF3C7] shadow-lg pointer-events-none will-change-transform"
               />
             </div>
           </div>
 
-          {/* Left Thumb: Manhwa Labeled 4 Skill Tiles + Dodge + Guard + Heavy + Attack */}
+          {/* Left Thumb: Responsive 4-Skill Deck (2x2 on narrow portrait, 1x4 otherwise) + Jump + Dodge + Guard + Attack */}
           <div
+            onPointerDown={(e) => e.stopPropagation()}
+            onPointerMove={(e) => e.stopPropagation()}
+            onPointerUp={(e) => e.stopPropagation()}
+            style={{
+              opacity: hudConfig.hudOpacity,
+              transform:
+                adaptive.touchDeckAutoScale !== 1 || hudConfig.actionsOffset.x !== 0 || hudConfig.actionsOffset.y !== 0
+                  ? `translate(${hudConfig.actionsOffset.x}px, ${hudConfig.actionsOffset.y}px) scale(${adaptive.touchDeckAutoScale})`
+                  : undefined,
+              transformOrigin: 'bottom left',
+              bottom: useCssLandscapeRotation ? '0.5rem' : 'max(0.5rem, var(--safe-bottom))',
+              left: useCssLandscapeRotation ? 'max(0.65rem, var(--safe-bottom))' : 'max(0.5rem, var(--safe-left))',
+            }}
             className={`absolute z-20 flex flex-col items-start touch-none ${
-              isCompactLandscape ? 'bottom-2 left-2.5 gap-1' : 'bottom-3 left-3 gap-1.5'
+              hudConfig.mobilePreset === 'spread' ? 'gap-2' : 'gap-1.5'
             }`}
           >
-            {/* Row 1: 4 Labeled Skill Tiles (matching Desktop readability) */}
-            <div className="flex items-center gap-1">
+            {/* Row 1: 4 Labeled Skill Tiles */}
+            <div
+              className={
+                adaptive.touchDeckLayout === 'narrow_portrait'
+                  ? 'grid grid-cols-2 gap-1'
+                  : 'flex items-center gap-1'
+              }
+            >
               {slotPowers.map((sp, idx) => {
                 const locked = idx >= hud.unlockedSkillSlots;
                 const cd = hud.slotCooldowns[idx] || 0;
@@ -1450,16 +1868,14 @@ export const ArenaCombatView: React.FC<ArenaCombatViewProps> = ({
                       }
                     }}
                     style={{
+                      width: `${adaptive.skillTileWidthPx}px`,
+                      minHeight: `${adaptive.skillTileHeightPx}px`,
                       borderColor: locked ? 'rgba(100,116,139,0.4)' : `${SKILL_ACCENTS[idx]}88`,
                     }}
-                    className={`${
-                      isCompactLandscape
-                        ? 'min-w-[56px] max-w-[74px] min-h-[38px] px-1.5 py-1'
-                        : 'min-w-[64px] max-w-[82px] min-h-[44px] px-2 py-1'
-                    } rounded-xl border text-[#F1F5F9] flex flex-col items-center justify-center gap-0.5 backdrop-blur-md transition-transform ${
+                    className={`px-1.5 py-1 rounded-xl border text-[#F1F5F9] flex flex-col items-center justify-center gap-0.5 transition-transform ${
                       locked
-                        ? 'bg-[#080C15]/85 opacity-55 cursor-not-allowed'
-                        : 'bg-[#101A2F]/92 disabled:opacity-40 active:scale-95'
+                        ? 'bg-[#080C15]/92 opacity-55 cursor-not-allowed'
+                        : 'bg-[#101A2F]/95 disabled:opacity-40 active:scale-95'
                     }`}
                   >
                     <div className="flex items-center justify-between w-full gap-1 text-[9px] font-mono-num">
@@ -1480,8 +1896,21 @@ export const ArenaCombatView: React.FC<ArenaCombatViewProps> = ({
               })}
             </div>
 
-            {/* Row 2: Dodge + Guard + Labeled Heavy + Primary Attack */}
-            <div className="flex items-end gap-1.5">
+            {/* Row 2: Jump + Dodge + Guard + Heavy + Primary Attack */}
+            <div className="flex items-end gap-1">
+              <button
+                type="button"
+                onPointerDown={(e) => {
+                  e.stopPropagation();
+                  simRef.current?.triggerPlayer1Action('jump');
+                }}
+                style={{ width: `${adaptive.actionBtnSizePx}px`, height: `${adaptive.actionBtnSizePx}px` }}
+                className="rounded-xl bg-[#0F2438]/95 border border-cyan-400/55 text-cyan-200 flex flex-col items-center justify-center gap-0.5 active:scale-95 shrink-0"
+              >
+                <ArrowUp className="w-4 h-4 text-cyan-300" />
+                <span className="text-[9px] font-bold">قفز</span>
+              </button>
+
               <button
                 type="button"
                 disabled={hud.dodgeCd > 0}
@@ -1489,9 +1918,8 @@ export const ArenaCombatView: React.FC<ArenaCombatViewProps> = ({
                   e.stopPropagation();
                   simRef.current?.triggerPlayer1Action('dodge');
                 }}
-                className={`${
-                  isCompactLandscape ? 'min-w-[46px] min-h-[40px] px-1.5' : 'w-12 h-12 min-w-[48px] min-h-[48px]'
-                } rounded-xl bg-[#121B2D]/92 border border-white/20 disabled:opacity-45 text-[#F1F5F9] flex flex-col items-center justify-center gap-0.5 active:scale-95`}
+                style={{ width: `${adaptive.actionBtnSizePx}px`, height: `${adaptive.actionBtnSizePx}px` }}
+                className="rounded-xl bg-[#121B2D]/95 border border-white/20 disabled:opacity-45 text-[#F1F5F9] flex flex-col items-center justify-center gap-0.5 active:scale-95 shrink-0"
               >
                 <Wind className="w-3.5 h-3.5 text-[#10B981]" />
                 <span className="text-[9px] font-semibold">
@@ -1511,9 +1939,8 @@ export const ArenaCombatView: React.FC<ArenaCombatViewProps> = ({
                 }}
                 onPointerLeave={() => simRef.current?.triggerPlayer1Action('block_end')}
                 onPointerCancel={() => simRef.current?.triggerPlayer1Action('block_end')}
-                className={`${
-                  isCompactLandscape ? 'min-w-[44px] min-h-[40px] px-1.5' : 'w-12 h-12 min-w-[48px] min-h-[48px]'
-                } rounded-xl bg-[#121B2D]/92 border border-white/20 text-[#F1F5F9] flex flex-col items-center justify-center gap-0.5 active:bg-[#22324F]`}
+                style={{ width: `${adaptive.actionBtnSizePx}px`, height: `${adaptive.actionBtnSizePx}px` }}
+                className="rounded-xl bg-[#121B2D]/95 border border-white/20 text-[#F1F5F9] flex flex-col items-center justify-center gap-0.5 active:bg-[#22324F] shrink-0"
               >
                 <Shield className="w-3.5 h-3.5 text-[#94A3B8]" />
                 <span className="text-[9px] font-semibold">صدّ</span>
@@ -1526,9 +1953,8 @@ export const ArenaCombatView: React.FC<ArenaCombatViewProps> = ({
                   e.stopPropagation();
                   simRef.current?.triggerPlayer1Action('heavy');
                 }}
-                className={`${
-                  isCompactLandscape ? 'min-w-[62px] max-w-[78px] min-h-[44px] px-1.5' : 'min-w-[68px] max-w-[84px] min-h-[50px] px-2'
-                } rounded-xl bg-[#16223A]/95 border-2 border-[#E6B85C]/65 disabled:opacity-45 text-[#F1F5F9] flex flex-col items-center justify-center gap-0.5 active:scale-95`}
+                style={{ minHeight: `${adaptive.actionBtnSizePx}px` }}
+                className="min-w-[46px] sm:min-w-[56px] max-w-[66px] sm:max-w-[74px] px-1.5 rounded-xl bg-[#16223A]/95 border-2 border-[#E6B85C]/65 disabled:opacity-45 text-[#F1F5F9] flex flex-col items-center justify-center gap-0.5 active:scale-95 shrink-0"
               >
                 <Zap className="w-4 h-4 text-[#E6B85C]" />
                 <span className="text-[9px] font-bold truncate w-full text-center">
@@ -1542,45 +1968,63 @@ export const ArenaCombatView: React.FC<ArenaCombatViewProps> = ({
                   e.stopPropagation();
                   simRef.current?.triggerPlayer1Action('attack');
                 }}
-                className={`${
-                  isCompactLandscape ? 'w-13 h-13 min-w-[52px] min-h-[52px]' : 'w-16 h-16 min-w-[64px] min-h-[64px]'
-                } rounded-full bg-[#E6B85C] active:bg-[#F5D076] text-[#0A0F1A] border-2 border-[#FEF3C7] font-bold flex flex-col items-center justify-center gap-0.5 shadow-lg active:scale-95`}
+                style={{
+                  width: `${adaptive.actionBtnSizePx + (adaptive.tier === 'xs_portrait' ? 6 : 10)}px`,
+                  height: `${adaptive.actionBtnSizePx + (adaptive.tier === 'xs_portrait' ? 6 : 10)}px`,
+                }}
+                className="rounded-full bg-[#E6B85C] active:bg-[#F5D076] text-[#0A0F1A] border-2 border-[#FEF3C7] font-bold flex flex-col items-center justify-center gap-0.5 shadow-lg active:scale-95 shrink-0"
               >
-                <Swords className={isCompactLandscape ? 'w-5 h-5' : 'w-6 h-6'} />
-                <span className={isCompactLandscape ? 'text-[10px] font-extrabold' : 'text-xs font-extrabold'}>
-                  هجوم
-                </span>
+                <Swords className="w-4 h-4 sm:w-5 sm:h-5" />
+                <span className="text-[9px] sm:text-[10px] font-extrabold">هجوم</span>
               </button>
             </div>
           </div>
         </>
       )}
 
-      {/* DESKTOP MODE: Compact Bottom Interactive Action Bar with 4 Skills */}
-      {!isMobile && !anyOverlayOpen && (
-        <div className="absolute bottom-2.5 inset-x-0 z-10 px-3 flex flex-col items-center gap-1.5 pointer-events-none">
-          <div className="pointer-events-auto flex flex-wrap items-center justify-center gap-1.5 bg-[#0B101D]/90 backdrop-blur-md border border-[#E6B85C]/25 rounded-xl p-1.5">
+      {/* DESKTOP MODE: Compact Bottom Interactive Action Bar with Jump & Dynamic Keybindings */}
+      {!showTouchControls && !anyOverlayOpen && !hudConfig.zenMode && (
+        <div
+          style={{
+            opacity: hudConfig.hudOpacity,
+            transform: adaptive.hudAutoScale !== 1 ? `scale(${adaptive.hudAutoScale})` : undefined,
+            transformOrigin: 'bottom center',
+            bottom: useCssLandscapeRotation ? '0.5rem' : 'max(0.625rem, var(--safe-bottom))',
+          }}
+          className="absolute inset-x-0 z-10 px-3 flex flex-col items-center gap-1.5 pointer-events-none"
+        >
+          <div className="pointer-events-auto max-w-[96vw] flex flex-wrap items-center justify-center gap-1.5 bg-[#0B101D]/94 border border-[#E6B85C]/30 rounded-xl p-1.5">
             <button
               type="button"
               onClick={() => simRef.current?.triggerPlayer1Action('attack')}
-              className="px-3 py-1.5 rounded-lg bg-[#E6B85C] hover:bg-[#F5D076] text-[#0A0F1A] font-bold text-xs flex items-center gap-1 cursor-pointer"
+              className="px-3 py-1.5 rounded-lg bg-[#E6B85C] hover:bg-[#F5D076] text-[#0A0F1A] font-bold text-xs flex items-center gap-1 whitespace-nowrap shrink-0 cursor-pointer"
             >
               <Swords className="w-3.5 h-3.5" />
               <span>هجوم</span>
-              <span className="font-mono-num text-[10px] opacity-80">[Space]</span>
+              <span className="font-mono-num text-[10px] opacity-80">[{formatKeyCodeLabel(keyBindings.attack)}]</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => simRef.current?.triggerPlayer1Action('jump')}
+              className="px-2.5 py-1.5 rounded-lg bg-[#0F2438] hover:bg-[#173552] text-cyan-200 font-semibold text-xs border border-cyan-400/40 flex items-center gap-1 whitespace-nowrap shrink-0 cursor-pointer"
+            >
+              <ArrowUp className="w-3.5 h-3.5 text-cyan-300" />
+              <span>قفز</span>
+              <span className="font-mono-num text-[10px] text-cyan-300/80">[{formatKeyCodeLabel(keyBindings.jump)}]</span>
             </button>
 
             <button
               type="button"
               disabled={hud.heavyCd > 0}
               onClick={() => simRef.current?.triggerPlayer1Action('heavy')}
-              className="px-2.5 py-1.5 rounded-lg bg-[#16223A] hover:bg-[#203050] disabled:opacity-50 text-[#F1F5F9] font-semibold text-xs border border-white/10 flex items-center gap-1 cursor-pointer"
+              className="px-2.5 py-1.5 rounded-lg bg-[#16223A] hover:bg-[#203050] disabled:opacity-50 text-[#F1F5F9] font-semibold text-xs border border-white/10 flex items-center gap-1 whitespace-nowrap shrink-0 cursor-pointer"
             >
               <Zap className="w-3.5 h-3.5 text-[#E6B85C]" />
               <span className="max-w-[90px] truncate">
                 {hud.heavyCd > 0 ? `${hud.heavyCd}ث` : weapon.heavySkillName}
               </span>
-              <span className="font-mono-num text-[10px] text-[#94A3B8]">[E]</span>
+              <span className="font-mono-num text-[10px] text-[#94A3B8]">[{formatKeyCodeLabel(keyBindings.heavy)}]</span>
             </button>
 
             {/* 4 Skill Slots (Gated to unlockedSkillSlots) */}
@@ -1588,6 +2032,7 @@ export const ArenaCombatView: React.FC<ArenaCombatViewProps> = ({
               const locked = idx >= hud.unlockedSkillSlots;
               const cd = hud.slotCooldowns[idx] || 0;
               const actionKey = (`skill${idx}`) as 'skill0' | 'skill1' | 'skill2' | 'skill3';
+              const keyLabel = formatKeyCodeLabel(keyBindings[actionKey]);
               return (
                 <button
                   key={`${sp.id}_bar_${idx}`}
@@ -1598,9 +2043,9 @@ export const ArenaCombatView: React.FC<ArenaCombatViewProps> = ({
                       simRef.current?.triggerPlayer1Action(actionKey);
                     }
                   }}
-                  title={locked ? `خانة مقفلة ${SKILL_KEYS[idx]} — افتحها من ورشة المهارات` : sp.name}
+                  title={locked ? `خانة مقفلة [${keyLabel}] — افتحها من ورشة المهارات` : sp.name}
                   style={{ borderColor: locked ? 'rgba(100,116,139,0.4)' : `${SKILL_ACCENTS[idx]}55` }}
-                  className={`px-2.5 py-1.5 rounded-lg font-semibold text-xs border flex items-center gap-1 ${
+                  className={`px-2.5 py-1.5 rounded-lg font-semibold text-xs border flex items-center gap-1 whitespace-nowrap shrink-0 ${
                     locked
                       ? 'bg-[#0B101B] text-[#64748B] opacity-55 cursor-not-allowed'
                       : 'bg-[#141E36] hover:bg-[#1E2B4B] disabled:opacity-45 text-[#F1F5F9] cursor-pointer'
@@ -1614,7 +2059,7 @@ export const ArenaCombatView: React.FC<ArenaCombatViewProps> = ({
                   <span className="max-w-[85px] truncate">
                     {locked ? 'مقفلة' : cd > 0 ? `${cd}ث` : sp.name}
                   </span>
-                  <span className="font-mono-num text-[10px] text-[#94A3B8]">{SKILL_KEYS[idx]}</span>
+                  <span className="font-mono-num text-[10px] text-[#94A3B8]">[{keyLabel}]</span>
                 </button>
               );
             })}
@@ -1623,11 +2068,11 @@ export const ArenaCombatView: React.FC<ArenaCombatViewProps> = ({
               type="button"
               disabled={hud.dodgeCd > 0}
               onClick={() => simRef.current?.triggerPlayer1Action('dodge')}
-              className="px-2.5 py-1.5 rounded-lg bg-[#121B2D] hover:bg-[#1E2B45] disabled:opacity-50 text-[#F1F5F9] font-semibold text-xs border border-white/10 flex items-center gap-1 cursor-pointer"
+              className="px-2.5 py-1.5 rounded-lg bg-[#121B2D] hover:bg-[#1E2B45] disabled:opacity-50 text-[#F1F5F9] font-semibold text-xs border border-white/10 flex items-center gap-1 whitespace-nowrap shrink-0 cursor-pointer"
             >
               <Wind className="w-3.5 h-3.5 text-[#10B981]" />
               <span>{hud.dodgeCd > 0 ? `${hud.dodgeCd}ث` : 'مراوغة'}</span>
-              <span className="font-mono-num text-[10px] text-[#94A3B8]">[Shift]</span>
+              <span className="font-mono-num text-[10px] text-[#94A3B8]">[{formatKeyCodeLabel(keyBindings.dodge)}]</span>
             </button>
 
             <button
@@ -1635,38 +2080,37 @@ export const ArenaCombatView: React.FC<ArenaCombatViewProps> = ({
               onPointerDown={() => simRef.current?.triggerPlayer1Action('block_start')}
               onPointerUp={() => simRef.current?.triggerPlayer1Action('block_end')}
               onPointerLeave={() => simRef.current?.triggerPlayer1Action('block_end')}
-              className="px-2.5 py-1.5 rounded-lg bg-[#121B2D] hover:bg-[#1E2B45] text-[#F1F5F9] font-semibold text-xs border border-white/10 flex items-center gap-1 cursor-pointer"
+              className="px-2.5 py-1.5 rounded-lg bg-[#121B2D] hover:bg-[#1E2B45] text-[#F1F5F9] font-semibold text-xs border border-white/10 flex items-center gap-1 whitespace-nowrap shrink-0 cursor-pointer"
             >
               <Shield className="w-3.5 h-3.5 text-[#94A3B8]" />
               <span>صدّ</span>
-              <span className="font-mono-num text-[10px] text-[#94A3B8]">[F]</span>
+              <span className="font-mono-num text-[10px] text-[#94A3B8]">[{formatKeyCodeLabel(keyBindings.block)}]</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => simRef.current?.triggerPlayer1Action('sprint')}
+              className={`px-2.5 py-1.5 rounded-lg font-semibold text-xs border flex items-center gap-1 whitespace-nowrap shrink-0 cursor-pointer ${
+                hud.sprintActive
+                  ? 'bg-[#38BDF8] text-[#0A0F1A] border-[#BAE6FD]'
+                  : 'bg-[#121B2D] hover:bg-[#1E2B45] text-[#F1F5F9] border-white/10'
+              }`}
+            >
+              <Wind className="w-3.5 h-3.5" />
+              <span>ركض</span>
+              <span className="font-mono-num text-[10px] opacity-80">[{formatKeyCodeLabel(keyBindings.sprint)}]</span>
             </button>
 
             {hud.isOverworld && (
-              <>
-                <button
-                  type="button"
-                  onClick={() => simRef.current?.triggerPlayer1Action('sprint')}
-                  className={`px-2.5 py-1.5 rounded-lg font-semibold text-xs border flex items-center gap-1 cursor-pointer ${
-                    hud.sprintActive
-                      ? 'bg-[#38BDF8] text-[#0A0F1A] border-[#BAE6FD]'
-                      : 'bg-[#121B2D] hover:bg-[#1E2B45] text-[#F1F5F9] border-white/10'
-                  }`}
-                >
-                  <Wind className="w-3.5 h-3.5" />
-                  <span>ركض</span>
-                  <span className="font-mono-num text-[10px] opacity-80">[C]</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setShowWorldMap(true)}
-                  className="px-2.5 py-1.5 rounded-lg bg-[#102036] hover:bg-[#183052] text-[#38BDF8] font-semibold text-xs border border-[#38BDF8]/35 flex items-center gap-1 cursor-pointer"
-                >
-                  <MapIcon className="w-3.5 h-3.5" />
-                  <span>خريطة</span>
-                  <span className="font-mono-num text-[10px]">[M]</span>
-                </button>
-              </>
+              <button
+                type="button"
+                onClick={() => setShowWorldMap(true)}
+                className="px-2.5 py-1.5 rounded-lg bg-[#102036] hover:bg-[#183052] text-[#38BDF8] font-semibold text-xs border border-[#38BDF8]/35 flex items-center gap-1 whitespace-nowrap shrink-0 cursor-pointer"
+              >
+                <MapIcon className="w-3.5 h-3.5" />
+                <span>خريطة</span>
+                <span className="font-mono-num text-[10px]">[{formatKeyCodeLabel(keyBindings.map)}]</span>
+              </button>
             )}
 
             {/* Consumables Quick Belt */}
@@ -1675,7 +2119,7 @@ export const ArenaCombatView: React.FC<ArenaCombatViewProps> = ({
                 type="button"
                 disabled={hud.consumables.elixir_heal <= 0}
                 onClick={() => simRef.current?.triggerConsumable('elixir_heal')}
-                title="جرعة الشفاء الملكية [1]"
+                title={`جرعة الشفاء الملكية [${formatKeyCodeLabel(keyBindings.potion1)}]`}
                 className="px-2 py-1.5 rounded bg-[#11241E] hover:bg-[#17332A] disabled:opacity-35 text-[#10B981] text-xs font-mono-num flex items-center gap-1 cursor-pointer"
               >
                 <Heart className="w-3.5 h-3.5" />
@@ -1685,7 +2129,7 @@ export const ArenaCombatView: React.FC<ArenaCombatViewProps> = ({
                 type="button"
                 disabled={hud.consumables.scroll_energy <= 0}
                 onClick={() => simRef.current?.triggerConsumable('scroll_energy')}
-                title="لفيفة الطاقة [2]"
+                title={`لفيفة الطاقة [${formatKeyCodeLabel(keyBindings.potion2)}]`}
                 className="px-2 py-1.5 rounded bg-[#10202C] hover:bg-[#172E40] disabled:opacity-35 text-[#38BDF8] text-xs font-mono-num flex items-center gap-1 cursor-pointer"
               >
                 <Sparkles className="w-3.5 h-3.5" />
@@ -1695,7 +2139,7 @@ export const ArenaCombatView: React.FC<ArenaCombatViewProps> = ({
                 type="button"
                 disabled={hud.consumables.tonic_fury <= 0}
                 onClick={() => simRef.current?.triggerConsumable('tonic_fury')}
-                title="إكسير غضب المعركة [3]"
+                title={`إكسير غضب المعركة [${formatKeyCodeLabel(keyBindings.potion3)}]`}
                 className="px-2 py-1.5 rounded bg-[#261D10] hover:bg-[#382A16] disabled:opacity-35 text-[#E6B85C] text-xs font-mono-num flex items-center gap-1 cursor-pointer"
               >
                 <Flame className="w-3.5 h-3.5" />
@@ -1704,24 +2148,29 @@ export const ArenaCombatView: React.FC<ArenaCombatViewProps> = ({
             </div>
           </div>
 
-          <p className="hidden md:block text-[11px] text-[#94A3B8]/90 bg-[#0B101D]/65 px-3 py-0.5 rounded">
-            WASD حركة · Q/R/Z/X أربع مهارات · E ثقيلة · G تفاعل{hud.isOverworld ? ' · C ركض · M خريطة' : ''} · V كاميرا
+          {hudConfig.widgets.controlsHint && adaptive.showDesktopShortcutLine && (
+          <p className="text-[11px] text-[#94A3B8] bg-[#0B101D]/90 px-3 py-0.5 rounded border border-white/5">
+            {formatKeyCodeLabel(keyBindings.moveForward)}/{formatKeyCodeLabel(keyBindings.moveBackward)}/{formatKeyCodeLabel(keyBindings.moveLeft)}/{formatKeyCodeLabel(keyBindings.moveRight)} حركة · {formatKeyCodeLabel(keyBindings.jump)} قفز · {formatKeyCodeLabel(keyBindings.attack)} أو النقر هجوم · اسحب لتدوير الكاميرا 360° · عجلة الفأرة للتقريب
           </p>
+          )}
         </div>
       )}
 
       {/* Overworld Fast-Travel Continent Map Modal [M] */}
       {showWorldMap && hud.isOverworld && !matchResult && (
-        <div className="absolute inset-0 z-30 bg-[#070B14]/88 backdrop-blur-md flex items-center justify-center p-2.5 sm:p-6 overflow-y-auto">
-          <div className="w-full max-w-4xl max-h-[94%] overflow-y-auto isekai-panel rounded-2xl p-3.5 sm:p-6 space-y-4 sm:space-y-5 my-auto">
-            <div className="flex items-center justify-between gap-3 border-b border-white/10 pb-3">
-              <div className="flex items-center gap-2">
-                <Compass className="w-5 h-5 text-[#E6B85C]" />
-                <div>
-                  <h2 className="font-display text-lg sm:text-xl font-extrabold text-[#F8FAFC]">
+        <div
+          onPointerDown={(e) => e.stopPropagation()}
+          className="absolute inset-0 z-30 bg-[#070B14]/92 flex flex-col p-2 sm:p-5 overflow-y-auto overscroll-contain"
+        >
+          <div className="m-auto w-full max-w-4xl max-h-full landscape-modal-card flex flex-col isekai-panel rounded-2xl overflow-hidden">
+            <div className="landscape-modal-header flex items-center justify-between gap-2 border-b border-white/10 p-3 sm:px-6 sm:pt-5 sm:pb-3 shrink-0">
+              <div className="flex items-center gap-2 min-w-0">
+                <Compass className="w-5 h-5 text-[#E6B85C] shrink-0" />
+                <div className="min-w-0">
+                  <h2 className="font-display text-sm sm:text-xl font-extrabold text-[#F8FAFC] truncate">
                     خريطة قارة إيثيريا العظمى (14,000م · بث القطاعات 100×)
                   </h2>
-                  <p className="text-xs text-[#94A3B8]">
+                  <p className="landscape-modal-subtitle text-[11px] sm:text-xs text-[#94A3B8] truncate">
                     القطاع الحالي <span className="font-mono-num text-[#38BDF8]">[{hud.currentChunkKey || '0,0'}]</span> · المكتشف:{' '}
                     <span className="font-mono-num text-[#E6B85C]">{profile.exploredChunks.length}</span> قطاعاً · انقر على حجر انتقال مفتوح للسفر الفوري.
                   </p>
@@ -1730,16 +2179,17 @@ export const ArenaCombatView: React.FC<ArenaCombatViewProps> = ({
               <button
                 type="button"
                 onClick={() => setShowWorldMap(false)}
-                className="p-2 rounded-lg bg-[#16223A] hover:bg-[#223254] text-[#F1F5F9] cursor-pointer"
+                className="p-2 rounded-lg bg-[#16223A] hover:bg-[#223254] text-[#F1F5F9] cursor-pointer shrink-0"
                 aria-label="إغلاق الخريطة"
               >
                 <X className="w-4 h-4" />
               </button>
             </div>
 
-            <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 items-start">
+            <div className="landscape-modal-body flex-1 min-h-0 overflow-y-auto overscroll-contain p-3 sm:p-6">
+            <div className="grid grid-cols-1 lg:grid-cols-12 landscape-split-12 gap-3.5 sm:gap-5 items-start">
               {/* Interactive Continent SVG Map (Toggle Kingdom 1400m vs Streamed Continent 14000m) */}
-              <div className="lg:col-span-6 bg-[#0A0F1A] border border-white/10 rounded-xl p-3 flex flex-col items-center gap-2">
+              <div className="lg:col-span-6 landscape-span-5 bg-[#0A0F1A] border border-white/10 rounded-xl p-2.5 sm:p-3 flex flex-col items-center gap-2">
                 <div className="w-full flex items-center justify-between gap-2 text-xs">
                   <button
                     type="button"
@@ -1908,7 +2358,7 @@ export const ArenaCombatView: React.FC<ArenaCombatViewProps> = ({
               </div>
 
               {/* 9 Waystones Fast Travel Grid */}
-              <div className="lg:col-span-6 grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+              <div className="lg:col-span-6 landscape-span-7 grid grid-cols-1 sm:grid-cols-2 gap-2">
                 {OVERWORLD_MAP.worldWaystones?.map((ws) => {
                   const unlocked =
                     ws.regionId === 'haven_village' || profile.discoveredRegions.includes(ws.regionId);
@@ -1941,37 +2391,42 @@ export const ArenaCombatView: React.FC<ArenaCombatViewProps> = ({
                 })}
               </div>
             </div>
+            </div>
           </div>
         </div>
       )}
 
       {/* Peaceful NPC Work & Economy Modal */}
       {activeNpcDef && !matchResult && (
-        <div className="absolute inset-0 z-30 bg-[#070B14]/88 backdrop-blur-md flex items-center justify-center p-2.5 sm:p-6 overflow-y-auto">
-          <div className="w-full max-w-2xl max-h-[94%] overflow-y-auto isekai-panel rounded-2xl p-3.5 sm:p-6 space-y-4 sm:space-y-5 my-auto">
-            <div className="flex items-start justify-between gap-3 border-b border-white/10 pb-3">
+        <div
+          onPointerDown={(e) => e.stopPropagation()}
+          className="absolute inset-0 z-30 bg-[#070B14]/92 flex flex-col p-2 sm:p-6 overflow-y-auto overscroll-contain"
+        >
+          <div className="m-auto w-full max-w-2xl max-h-full landscape-modal-card flex flex-col isekai-panel rounded-2xl overflow-hidden">
+            <div className="landscape-modal-header flex items-start justify-between gap-3 border-b border-white/10 p-3.5 sm:px-6 sm:pt-5 sm:pb-3 shrink-0">
               <div>
                 <div className="flex items-center gap-2 text-xs font-bold" style={{ color: activeNpcDef.accentColor }}>
                   <Briefcase className="w-4 h-4" />
                   <span>{activeNpcDef.title}</span>
                 </div>
-                <h2 className="font-display text-xl font-extrabold text-[#F8FAFC] mt-0.5">
+                <h2 className="font-display text-lg sm:text-xl font-extrabold text-[#F8FAFC] mt-0.5">
                   {activeNpcDef.name}
                 </h2>
-                <p className="text-xs text-[#10B981] mt-1">
+                <p className="landscape-modal-subtitle text-xs text-[#10B981] mt-1">
                   تم شفاء 25% من صحتك واستعادة طاقتك الكاملة عبر {activeNpcDef.name} ({activeNpcDef.serviceLabel})
                 </p>
               </div>
               <button
                 type="button"
                 onClick={() => setActiveNpcId(null)}
-                className="p-2 rounded-lg bg-[#16223A] hover:bg-[#223254] text-[#F1F5F9] cursor-pointer"
+                className="p-2 rounded-lg bg-[#16223A] hover:bg-[#223254] text-[#F1F5F9] cursor-pointer shrink-0"
                 aria-label="إغلاق النافذة"
               >
                 <X className="w-4 h-4" />
               </button>
             </div>
 
+            <div className="landscape-modal-body flex-1 min-h-0 overflow-y-auto overscroll-contain p-3.5 sm:p-6 space-y-4 sm:space-y-5">
             <div className="p-3.5 rounded-xl bg-[#0C1322] border border-white/10 text-xs sm:text-sm text-[#E2E8F0] leading-relaxed">
               «{activeNpcDef.lines[0]}»
             </div>
@@ -2144,13 +2599,17 @@ export const ArenaCombatView: React.FC<ArenaCombatViewProps> = ({
                 </div>
               </div>
             </div>
+            </div>
           </div>
         </div>
       )}
 
       {/* Live In-Game Chat Drawer */}
       {showChatDrawer && !matchResult && onSendChat && (
-        <div className="absolute inset-0 z-30 bg-[#070B14]/75 backdrop-blur-sm flex items-center justify-center p-2.5 sm:p-5 overflow-y-auto">
+        <div
+          onPointerDown={(e) => e.stopPropagation()}
+          className="absolute inset-0 z-30 bg-[#070B14]/88 flex flex-col p-2.5 sm:p-5 overflow-y-auto overscroll-contain"
+        >
           <SystemChatPanel
             playerName={profile.avatar.name}
             playerRating={profile.rating}
@@ -2168,8 +2627,11 @@ export const ArenaCombatView: React.FC<ArenaCombatViewProps> = ({
 
       {/* Pause Overlay */}
       {paused && !matchResult && (
-        <div className="absolute inset-0 z-30 bg-[#0A0F1A]/80 backdrop-blur-sm flex items-center justify-center p-2.5 sm:p-4 overflow-y-auto">
-          <div className="w-full max-w-sm max-h-[94%] overflow-y-auto system-window rounded-2xl p-4 sm:p-6 space-y-3.5 sm:space-y-5 text-center my-auto">
+        <div
+          onPointerDown={(e) => e.stopPropagation()}
+          className="absolute inset-0 z-30 bg-[#0A0F1A]/90 flex flex-col p-2.5 sm:p-4 overflow-y-auto overscroll-contain"
+        >
+          <div className="m-auto w-full max-w-sm max-h-full overflow-y-auto overscroll-contain system-window rounded-2xl p-4 sm:p-6 space-y-3 sm:space-y-4 text-center">
             <h2 className="font-display text-xl sm:text-2xl font-bold text-[#F8FAFC]">اللعبة متوقفة مؤقتاً</h2>
             <p className="text-xs text-[#94A3B8]">
               يمكنك التحويل بين وضع الهاتف والحاسوب، تفعيل الوضع الأفقي، تبديل مظهر النظام، أو تعديل جودة الأداء.
@@ -2215,8 +2677,11 @@ export const ArenaCombatView: React.FC<ArenaCombatViewProps> = ({
 
       {/* Victory / Match Summary Modal */}
       {matchResult && (
-        <div className="absolute inset-0 z-30 bg-[#0A0F1A]/85 backdrop-blur-sm flex items-center justify-center p-2.5 sm:p-4 overflow-y-auto">
-          <div className="w-full max-w-lg max-h-[94%] overflow-y-auto isekai-panel rounded-2xl p-4 sm:p-7 space-y-4 sm:space-y-6 my-auto">
+        <div
+          onPointerDown={(e) => e.stopPropagation()}
+          className="absolute inset-0 z-30 bg-[#0A0F1A]/92 flex flex-col p-2.5 sm:p-4 overflow-y-auto overscroll-contain"
+        >
+          <div className="m-auto w-full max-w-lg max-h-full overflow-y-auto overscroll-contain isekai-panel rounded-2xl p-4 sm:p-7 space-y-4 sm:space-y-5">
             <div className="text-center space-y-1.5">
               <p className="text-xs font-semibold text-[#E6B85C]">
                 {displayMap.name} · المدة{' '}
@@ -2312,6 +2777,22 @@ export const ArenaCombatView: React.FC<ArenaCombatViewProps> = ({
           </div>
         </div>
       )}
+
+      {/* HUD, Keybindings, Quality & Dual-Engine Customizer Modal */}
+      <HudCustomizerModal
+        open={showCustomizer}
+        onClose={() => setShowCustomizer(false)}
+        renderEngine={profile.renderEngine || 'auto'}
+        onChangeRenderEngine={(m) => onChangeRenderEngine?.(m)}
+        quality={profile.quality}
+        onChangeQuality={onChangeQuality}
+        hudConfig={hudConfig}
+        onChangeHudConfig={(cfg) => onChangeHudConfig?.(cfg)}
+        onResetHudConfig={() => onResetHudConfig?.()}
+        keyBindings={keyBindings}
+        onChangeKeyBindings={(kb) => onChangeKeyBindings?.(kb)}
+        onResetKeyBindings={() => onResetKeyBindings?.()}
+      />
     </div>
   );
 };

@@ -22,6 +22,16 @@
     --sys-glow: rgba(56, 189, 248, 0.16);
     --sys-ambient-a: rgba(56, 189, 248, 0.08);
     --sys-ambient-b: rgba(230, 184, 92, 0.07);
+
+    /* Fluid Adaptive UI Engine Tokens */
+    --ui-shell-max: 1380px;
+    --ui-pad-x: clamp(0.75rem, 2.2vw, 1.75rem);
+    --ui-pad-y: clamp(0.75rem, 2vh, 1.75rem);
+    --ui-section-gap: clamp(0.875rem, 2vw, 1.5rem);
+    --safe-top: env(safe-area-inset-top, 0px);
+    --safe-bottom: env(safe-area-inset-bottom, 0px);
+    --safe-left: env(safe-area-inset-left, 0px);
+    --safe-right: env(safe-area-inset-right, 0px);
   }
 
   [data-system-theme="crimson_abyss"] {
@@ -45,6 +55,13 @@
     font-family: var(--font-body);
     background-color: var(--sys-bg);
     color: #f1f5f9;
+    overflow-x: clip;
+    -webkit-text-size-adjust: 100%;
+  }
+
+  body {
+    min-height: 100dvh;
+    overflow-x: clip;
   }
 
   h1, h2, h3, .font-display {
@@ -58,18 +75,57 @@
   }
 }
 
+/* Adaptive Shell Containers & Fluid Typography */
+.ui-shell-container {
+  width: 100%;
+  max-width: var(--ui-shell-max);
+  margin-inline: auto;
+  padding-inline: var(--ui-pad-x);
+  padding-block: var(--ui-pad-y);
+}
+
+.ui-hero-title {
+  font-size: clamp(1.35rem, 2.8vw + 0.55rem, 2.5rem);
+  line-height: 1.22;
+}
+
+.ui-section-title {
+  font-size: clamp(1.1rem, 1.5vw + 0.65rem, 1.75rem);
+  line-height: 1.28;
+}
+
+.safe-pad-top {
+  padding-top: max(0.5rem, var(--safe-top));
+}
+
+.safe-pad-bottom {
+  padding-bottom: max(0.5rem, var(--safe-bottom));
+}
+
+.safe-pad-x {
+  padding-inline-start: max(0.5rem, var(--safe-left));
+  padding-inline-end: max(0.5rem, var(--safe-right));
+}
+
 /* Manhwa System Window & Panel Architecture */
 .isekai-panel,
 .system-window {
   position: relative;
   background: linear-gradient(155deg, var(--sys-surface), var(--sys-surface-deep));
-  backdrop-filter: blur(14px);
   border: 1px solid var(--sys-border);
   box-shadow:
     0 16px 38px -14px rgba(2, 4, 14, 0.85),
     0 0 28px -12px var(--sys-glow),
     inset 0 1px 0 rgba(255, 255, 255, 0.07),
     inset 0 0 22px var(--sys-glow);
+}
+
+/* Gate backdrop blur to tablets/desktops so mobile GPU stays smooth */
+@media (min-width: 768px) {
+  .isekai-panel,
+  .system-window {
+    backdrop-filter: blur(14px);
+  }
 }
 
 .system-window::before {
@@ -166,15 +222,36 @@ input[type="range"].forge-slider::-webkit-slider-thumb:hover {
   scrollbar-width: none;
 }
 
-/* Mobile Landscape Immediate Viewport Fit (phones held horizontally, height <= 520px) */
-@media (max-height: 520px) and (orientation: landscape) {
+/* Mobile Landscape Immediate Viewport Fit (both native landscape <=540px and CSS-rotated combat) */
+@media (max-height: 540px) and (orientation: landscape) {
+  .isekai-panel,
+  .system-window {
+    backdrop-filter: none !important;
+  }
+  .ui-shell-container {
+    padding-block: 0.6rem !important;
+  }
+  .ui-hero-title {
+    font-size: clamp(1.1rem, 2.2vw, 1.55rem) !important;
+  }
   .landscape-phone-header-inner {
-    height: 3rem !important;
-    padding-top: 0.25rem !important;
-    padding-bottom: 0.25rem !important;
+    height: 2.75rem !important;
+    padding-top: 0.15rem !important;
+    padding-bottom: 0.15rem !important;
   }
   .landscape-phone-inline-nav {
     display: flex !important;
+    gap: 0.55rem !important;
+  }
+  .landscape-phone-nav-link {
+    font-size: 0.72rem !important;
+    padding-block: 0.25rem !important;
+  }
+  .landscape-label-full {
+    display: none !important;
+  }
+  .landscape-label-short {
+    display: inline !important;
   }
   .landscape-phone-hide-bottom {
     display: none !important;
@@ -183,8 +260,90 @@ input[type="range"].forge-slider::-webkit-slider-thumb:hover {
     padding-bottom: 0 !important;
   }
   .landscape-phone-story-banner {
-    height: 6.25rem !important;
+    height: 5.25rem !important;
   }
+  .landscape-split-12 {
+    grid-template-columns: repeat(12, minmax(0, 1fr)) !important;
+    gap: 0.875rem !important;
+  }
+  .landscape-span-7 {
+    grid-column: span 7 / span 7 !important;
+  }
+  .landscape-span-5 {
+    grid-column: span 5 / span 5 !important;
+  }
+  .landscape-span-4 {
+    grid-column: span 4 / span 4 !important;
+  }
+  .landscape-span-8 {
+    grid-column: span 8 / span 8 !important;
+  }
+  .landscape-grid-2 {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+    gap: 0.75rem !important;
+  }
+  .landscape-preview-box {
+    height: clamp(175px, 50dvh, 245px) !important;
+    min-height: 175px !important;
+  }
+  .landscape-svg-compact {
+    width: 9rem !important;
+    height: 9rem !important;
+  }
+  .landscape-compact-header {
+    padding-bottom: 0.6rem !important;
+  }
+  .landscape-modal-card {
+    max-height: 100% !important;
+  }
+  .landscape-modal-header {
+    padding-block: 0.45rem !important;
+  }
+  .landscape-modal-subtitle {
+    display: none !important;
+  }
+  .landscape-modal-tabs {
+    padding-block: 0.35rem !important;
+  }
+  .landscape-modal-body {
+    padding: 0.65rem !important;
+  }
+  .landscape-modal-footer {
+    padding-block: 0.45rem !important;
+  }
+}
+
+/* Identical compact rules when CSS-rotated landscape is active inside portrait browsers */
+[data-landscape-compact="true"] .landscape-phone-story-banner {
+  height: 5.25rem !important;
+}
+[data-landscape-compact="true"] .landscape-split-12 {
+  grid-template-columns: repeat(12, minmax(0, 1fr)) !important;
+  gap: 0.75rem !important;
+}
+[data-landscape-compact="true"] .landscape-span-7 {
+  grid-column: span 7 / span 7 !important;
+}
+[data-landscape-compact="true"] .landscape-span-5 {
+  grid-column: span 5 / span 5 !important;
+}
+[data-landscape-compact="true"] .landscape-modal-card {
+  max-height: 100% !important;
+}
+[data-landscape-compact="true"] .landscape-modal-header {
+  padding-block: 0.4rem !important;
+}
+[data-landscape-compact="true"] .landscape-modal-subtitle {
+  display: none !important;
+}
+[data-landscape-compact="true"] .landscape-modal-tabs {
+  padding-block: 0.3rem !important;
+}
+[data-landscape-compact="true"] .landscape-modal-body {
+  padding: 0.65rem !important;
+}
+[data-landscape-compact="true"] .landscape-modal-footer {
+  padding-block: 0.4rem !important;
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -194,4 +353,3 @@ input[type="range"].forge-slider::-webkit-slider-thumb:hover {
     transition-duration: 0.01ms !important;
   }
 }
-

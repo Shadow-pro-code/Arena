@@ -19,6 +19,8 @@ import { RewardsView } from './components/RewardsView';
 import { PvpCompetitionView } from './components/PvpCompetitionView';
 import { ArenaCombatView } from './components/ArenaCombatView';
 import { StoryPrologueModal } from './components/StoryPrologueModal';
+import { HudCustomizerModal } from './components/HudCustomizerModal';
+import { DEFAULT_HUD_CONFIG, DEFAULT_KEY_BINDINGS, formatKeyCodeLabel } from './data/controlDefaults';
 
 export function App() {
   const {
@@ -60,11 +62,16 @@ export function App() {
     buyChest,
     setSystemTheme,
     setQuality,
+    setRenderEngine,
     setCameraView,
     setSoundEnabled,
     setDeviceMode,
     setLandscapeLocked,
     setFavoriteArena,
+    setKeyBindings,
+    resetKeyBindings,
+    setHudConfig,
+    resetHudConfig,
   } = usePlayerProgress();
 
   const mp = useMultiplayerSocket();
@@ -75,6 +82,7 @@ export function App() {
   const [activeRival, setActiveRival] = useState<RivalChampion>(RIVAL_CHAMPIONS[0]);
   const [localP2Avatar, setLocalP2Avatar] = useState<AvatarConfig>(RIVAL_CHAMPIONS[1].avatar);
   const [showStoryModal, setShowStoryModal] = useState(false);
+  const [showHubCustomizer, setShowHubCustomizer] = useState(false);
 
   // Enter combat automatically once an online room is created/joined
   useEffect(() => {
@@ -178,8 +186,8 @@ export function App() {
   return (
     <div
       data-system-theme={profile.systemTheme}
-      className={`min-h-screen isekai-rune-bg text-[#F1F5F9] flex flex-col ${
-        destination !== 'combat' ? 'pb-16 md:pb-0 landscape-phone-root' : ''
+      className={`min-h-[100dvh] isekai-rune-bg text-[#F1F5F9] flex flex-col ${
+        destination !== 'combat' ? 'pb-20 md:pb-0 safe-pad-bottom landscape-phone-root' : ''
       }`}
     >
       {destination !== 'combat' && (
@@ -204,7 +212,9 @@ export function App() {
           onStartCombat={handleStartCombat}
           onNavigate={setDestination}
           onOpenStory={() => setShowStoryModal(true)}
+          onOpenCustomizer={() => setShowHubCustomizer(true)}
           onChangeQuality={setQuality}
+          onChangeRenderEngine={setRenderEngine}
           onChangeCamera={setCameraView}
           onChangeDeviceMode={setDeviceMode}
           onToggleLandscape={setLandscapeLocked}
@@ -303,6 +313,11 @@ export function App() {
           onOnlineVfxSend={mp.sendPlayerVfx}
           onBindOnlineListeners={mp.setCombatListeners}
           onChangeQuality={setQuality}
+          onChangeRenderEngine={setRenderEngine}
+          onChangeKeyBindings={setKeyBindings}
+          onResetKeyBindings={resetKeyBindings}
+          onChangeHudConfig={setHudConfig}
+          onResetHudConfig={resetHudConfig}
           onChangeCamera={setCameraView}
           onChangeDeviceMode={setDeviceMode}
           onToggleLandscape={setLandscapeLocked}
@@ -339,18 +354,36 @@ export function App() {
         onClose={() => setShowStoryModal(false)}
       />
 
-      {destination !== 'combat' && (
-        <footer className="mt-auto border-t border-[#E6B85C]/15 bg-[#0B101D]/65 py-5 px-4 sm:px-6 text-xs text-[#94A3B8]">
-          <div className="max-w-[1360px] mx-auto flex flex-wrap items-center justify-between gap-3">
-            <span>ميدان الأبطال — عالم إيثيريا المفتوح ببث القطاعات (14,000م · 100×) وساحات 3D</span>
-            <span>
-              {profile.deviceMode === 'mobile'
-                ? 'وضع الهاتف نشط: عصا تحكم 360° + خانات مهارات 1–4 + الوضع الأفقي'
-                : 'وضع الحاسوب: WASD حركة · Space هجوم · Q/R/Z/X مهارات · C ركض · M خريطة · G تفاعل · V كاميرا'}
-            </span>
-          </div>
-        </footer>
-      )}
+      <HudCustomizerModal
+        open={showHubCustomizer && destination !== 'combat'}
+        onClose={() => setShowHubCustomizer(false)}
+        renderEngine={profile.renderEngine || 'auto'}
+        onChangeRenderEngine={setRenderEngine}
+        quality={profile.quality}
+        onChangeQuality={setQuality}
+        hudConfig={profile.hudConfig || DEFAULT_HUD_CONFIG}
+        onChangeHudConfig={setHudConfig}
+        onResetHudConfig={resetHudConfig}
+        keyBindings={profile.keyBindings || DEFAULT_KEY_BINDINGS}
+        onChangeKeyBindings={setKeyBindings}
+        onResetKeyBindings={resetKeyBindings}
+      />
+
+      {destination !== 'combat' && (() => {
+        const kb = profile.keyBindings || DEFAULT_KEY_BINDINGS;
+        return (
+          <footer className="mt-auto border-t border-[#E6B85C]/15 bg-[#0B101D]/65 py-5 px-[var(--ui-pad-x)] text-xs text-[#94A3B8]">
+            <div className="max-w-[var(--ui-shell-max)] mx-auto flex flex-wrap items-center justify-between gap-3">
+              <span>ميدان الأبطال — عالم إيثيريا المفتوح ببث القطاعات (14,000م · 100×) وساحات 3D</span>
+              <span>
+                {profile.deviceMode === 'mobile'
+                  ? 'وضع الهاتف نشط: عصا تحكم 360° + قفز ومراوغة + خانات قابلة للتخصيص'
+                  : `الحاسوب: ${formatKeyCodeLabel(kb.moveForward)}/${formatKeyCodeLabel(kb.moveLeft)}/${formatKeyCodeLabel(kb.moveBackward)}/${formatKeyCodeLabel(kb.moveRight)} حركة · ${formatKeyCodeLabel(kb.jump)} قفز · ${formatKeyCodeLabel(kb.attack)} هجوم · ${formatKeyCodeLabel(kb.dodge)} مراوغة · ${formatKeyCodeLabel(kb.toggleHud)} إخفاء الواجهة`}
+              </span>
+            </div>
+          </footer>
+        );
+      })()}
     </div>
   );
 }

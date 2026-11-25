@@ -346,7 +346,7 @@ export class ChunkWorldStreamer {
   public update(playerX: number, playerZ: number, quality: GraphicsQuality): StreamUpdateResult {
     const coord = worldToChunkCoord(playerX, playerZ);
     const centerKey = getChunkKey(coord.cx, coord.cz);
-    const streamRadius = quality === 'eco' || quality === 'balanced' ? 1 : 2; // 3x3 on weak devices, 5x5 on higher tiers
+    const streamRadius = quality === 'eco' || quality === 'balanced' ? 1 : quality === 'impossible' ? 3 : 2; // 3x3 on weak devices, 5x5 on high-mythic, 7x7 on impossible
 
     const changed = centerKey !== this.lastCenterKey || quality !== this.lastQuality || this.activeChunks.size === 0;
     const newlyEnteredKeys: string[] = [];

@@ -303,10 +303,10 @@ export const AvatarForge: React.FC<AvatarForgeProps> = ({
   };
 
   return (
-    <main className="max-w-[1360px] mx-auto px-4 sm:px-6 py-6 sm:py-8 space-y-6">
-      <div className="flex flex-wrap items-end justify-between gap-4 border-b border-[#E6B85C]/20 pb-5">
+    <main className="ui-shell-container space-y-[var(--ui-section-gap)]">
+      <div className="flex flex-wrap items-end justify-between gap-4 border-b border-[#E6B85C]/20 pb-5 landscape-compact-header">
         <div>
-          <h1 className="font-display text-2xl sm:text-3xl font-extrabold text-[#F1F5F9]">
+          <h1 className="font-display ui-section-title font-extrabold text-[#F1F5F9]">
             ورشة بناء الأفتار والسمات الثماني
           </h1>
           <p className="text-sm text-[#94A3B8] mt-1">
@@ -348,9 +348,9 @@ export const AvatarForge: React.FC<AvatarForgeProps> = ({
         </div>
       )}
 
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-stretch">
+      <div className="grid grid-cols-1 lg:grid-cols-12 landscape-split-12 gap-6 items-stretch">
         {/* 3D Interactive Studio Preview */}
-        <section className="lg:col-span-5 flex flex-col isekai-panel rounded-2xl overflow-hidden">
+        <section className="lg:col-span-5 landscape-span-5 flex flex-col isekai-panel rounded-2xl overflow-hidden">
           <div className="flex items-center justify-between px-4 py-3 border-b border-white/10 bg-[#0A101E]/60">
             <span className="font-display font-bold text-sm text-[#F1F5F9]">
               معاينة ثلاثية الأبعاد 360°
@@ -381,10 +381,12 @@ export const AvatarForge: React.FC<AvatarForgeProps> = ({
 
           <AvatarPreview3D
             avatar={syncedDraft}
+            quality={profile.quality}
+            renderEngine={profile.renderEngine}
             weaponLevel={weaponLv}
             previewAction={previewAct}
             caption="اسحب أفقياً لتدوير الأفتار وفحص المفاصل الملساء والدروع"
-            className="flex-1 min-h-[340px]"
+            className="flex-1 h-[clamp(240px,38dvh,380px)] lg:h-auto lg:min-h-[340px] landscape-preview-box"
           />
 
           <div className="p-4 border-t border-white/10 bg-[#0B111E] space-y-3">
@@ -430,7 +432,7 @@ export const AvatarForge: React.FC<AvatarForgeProps> = ({
         </section>
 
         {/* Customization Controls Studio */}
-        <section className="lg:col-span-7 isekai-panel rounded-2xl flex flex-col">
+        <section className="lg:col-span-7 landscape-span-7 isekai-panel rounded-2xl flex flex-col">
           {/* Segmented 5 Forge Tabs */}
           <div className="flex items-center gap-1.5 p-2 border-b border-white/10 bg-[#0A101E]/60 overflow-x-auto no-scrollbar">
             {(

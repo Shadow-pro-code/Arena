@@ -84,14 +84,14 @@ export const StoryPrologueModal: React.FC<StoryPrologueModalProps> = ({
 
   return (
     <div
-      className="fixed inset-0 z-50 bg-[#050811]/88 backdrop-blur-md flex items-center justify-center p-3 sm:p-5 overflow-y-auto"
+      className="fixed inset-0 z-50 bg-[#050811]/90 backdrop-blur-md flex flex-col p-2 sm:p-5 overflow-y-auto overscroll-contain"
       role="dialog"
       aria-modal="true"
       aria-label="قصة استدعاء المستدعى في إيثيريا"
     >
-      <div className="w-full max-w-4xl max-h-[94dvh] overflow-y-auto isekai-panel rounded-2xl shadow-2xl my-auto">
+      <div className="m-auto w-full max-w-4xl max-h-full landscape-modal-card flex flex-col isekai-panel rounded-2xl shadow-2xl overflow-hidden">
         {/* Dramatic Visual Banner */}
-        <div className="relative h-36 sm:h-52 landscape-phone-story-banner bg-[#0B1120] overflow-hidden shrink-0">
+        <div className="relative h-32 sm:h-48 landscape-phone-story-banner bg-[#0B1120] overflow-hidden shrink-0">
           <img
             src={BUNDLED_IMAGES.storyAwakening}
             alt="بوابة استدعاء إيثيريا"
@@ -136,8 +136,8 @@ export const StoryPrologueModal: React.FC<StoryPrologueModalProps> = ({
           </div>
         </div>
 
-        {/* Content Body */}
-        <div className="p-4 sm:p-6 space-y-4 sm:space-y-6">
+        {/* Scrollable Content Body */}
+        <div className="landscape-modal-body flex-1 min-h-0 overflow-y-auto overscroll-contain p-4 sm:p-6 space-y-4 sm:space-y-6">
           {!isBlessingStep ? (
             <div className="space-y-4">
               <h2 className="font-display text-2xl sm:text-3xl font-extrabold text-[#F8FAFC]">
@@ -219,50 +219,51 @@ export const StoryPrologueModal: React.FC<StoryPrologueModalProps> = ({
             </div>
           )}
 
-          {/* Footer Controls */}
-          <div className="flex flex-wrap items-center justify-between gap-3 pt-2 border-t border-white/10">
-            <div className="flex items-center gap-2">
-              {step > 0 && (
-                <button
-                  type="button"
-                  onClick={() => setStep((s) => Math.max(0, s - 1))}
-                  className="px-4 py-2.5 text-xs font-semibold text-[#CBD5E1] bg-[#141F35] hover:bg-[#1D2D4C] border border-white/10 rounded-xl cursor-pointer"
-                >
-                  السابق
-                </button>
-              )}
-              {!isBlessingStep && !hasSeenIntro && (
-                <button
-                  type="button"
-                  onClick={() => setStep(2)}
-                  className="px-3 py-2.5 text-xs font-medium text-[#94A3B8] hover:text-[#F1F5F9] cursor-pointer"
-                >
-                  تخطي إلى اختيار البركة
-                </button>
-              )}
-            </div>
+        </div>
 
-            <div className="flex items-center gap-2.5">
-              {!isBlessingStep ? (
-                <button
-                  type="button"
-                  onClick={() => setStep((s) => Math.min(2, s + 1))}
-                  className="px-6 py-2.5 text-sm font-bold text-[#0A0F1A] bg-[#E6B85C] hover:bg-[#F5D076] rounded-xl flex items-center gap-2 cursor-pointer shadow-md"
-                >
-                  <span>متابعة القصة</span>
-                  <Shield className="w-4 h-4" />
-                </button>
-              ) : (
-                <button
-                  type="button"
-                  onClick={handleConfirmBlessing}
-                  className="px-6 py-2.5 text-sm font-bold text-[#0A0F1A] bg-gradient-to-r from-[#E6B85C] to-[#F5D076] hover:brightness-105 rounded-xl flex items-center gap-2 cursor-pointer shadow-lg"
-                >
-                  <Sparkles className="w-4 h-4" />
-                  <span>{hasSeenIntro ? 'العودة إلى إيثيريا' : 'تفعيل البركة وبدء المغامرة'}</span>
-                </button>
-              )}
-            </div>
+        {/* Footer Controls */}
+        <div className="landscape-modal-footer flex flex-wrap items-center justify-between gap-3 px-4 py-3 sm:px-6 sm:py-4 border-t border-white/10 bg-[#0B1220]/95 shrink-0">
+          <div className="flex items-center gap-2">
+            {step > 0 && (
+              <button
+                type="button"
+                onClick={() => setStep((s) => Math.max(0, s - 1))}
+                className="px-4 py-2 text-xs font-semibold text-[#CBD5E1] bg-[#141F35] hover:bg-[#1D2D4C] border border-white/10 rounded-xl cursor-pointer"
+              >
+                السابق
+              </button>
+            )}
+            {!isBlessingStep && !hasSeenIntro && (
+              <button
+                type="button"
+                onClick={() => setStep(2)}
+                className="px-3 py-2 text-xs font-medium text-[#94A3B8] hover:text-[#F1F5F9] cursor-pointer"
+              >
+                تخطي إلى اختيار البركة
+              </button>
+            )}
+          </div>
+
+          <div className="flex items-center gap-2.5">
+            {!isBlessingStep ? (
+              <button
+                type="button"
+                onClick={() => setStep((s) => Math.min(2, s + 1))}
+                className="px-5 py-2 text-xs sm:text-sm font-bold text-[#0A0F1A] bg-[#E6B85C] hover:bg-[#F5D076] rounded-xl flex items-center gap-2 cursor-pointer shadow-md"
+              >
+                <span>متابعة القصة</span>
+                <Shield className="w-4 h-4" />
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={handleConfirmBlessing}
+                className="px-5 py-2 text-xs sm:text-sm font-bold text-[#0A0F1A] bg-gradient-to-r from-[#E6B85C] to-[#F5D076] hover:brightness-105 rounded-xl flex items-center gap-2 cursor-pointer shadow-lg"
+              >
+                <Sparkles className="w-4 h-4" />
+                <span>{hasSeenIntro ? 'العودة إلى إيثيريا' : 'تفعيل البركة وبدء المغامرة'}</span>
+              </button>
+            )}
           </div>
         </div>
       </div>

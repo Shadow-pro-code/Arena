@@ -35,13 +35,13 @@ export const TopNav: React.FC<TopNavProps> = ({
   return (
     <>
       <header
-        className="sticky top-0 z-30 backdrop-blur-xl border-b shadow-lg shadow-black/35"
+        className="sticky top-0 z-30 backdrop-blur-xl border-b shadow-lg shadow-black/35 safe-pad-top"
         style={{
           backgroundColor: 'var(--sys-surface-deep)',
           borderColor: 'var(--sys-border)',
         }}
       >
-        <div className="max-w-[1360px] mx-auto px-3 sm:px-6 h-16 landscape-phone-header-inner flex items-center justify-between gap-2 sm:gap-3">
+        <div className="max-w-[1380px] mx-auto px-[var(--ui-pad-x)] h-14 sm:h-16 landscape-phone-header-inner flex items-center justify-between gap-2 sm:gap-3">
           {/* Zone 1: Manhwa System Crest & Brand */}
           <button
             type="button"
@@ -65,7 +65,7 @@ export const TopNav: React.FC<TopNavProps> = ({
           </button>
 
           {/* Zone 2: Desktop + Landscape Phone Navigation Links */}
-          <nav className="hidden md:flex landscape-phone-inline-nav items-center gap-3 sm:gap-5 lg:gap-7 overflow-x-auto no-scrollbar">
+          <nav className="hidden md:flex landscape-phone-inline-nav items-center gap-2.5 md:gap-5 lg:gap-7 overflow-x-auto no-scrollbar">
             {NAV_ITEMS.map((item) => {
               const isActive = active === item.id;
               return (
@@ -73,11 +73,12 @@ export const TopNav: React.FC<TopNavProps> = ({
                   key={item.id}
                   type="button"
                   onClick={() => onNavigate(item.id)}
-                  className={`relative py-2 text-sm font-semibold transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+                  className={`landscape-phone-nav-link relative py-2 text-xs sm:text-sm font-semibold transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
                     isActive ? 'text-[#F8FAFC]' : 'text-[#94A3B8] hover:text-[#F1F5F9]'
                   }`}
                 >
-                  {item.label}
+                  <span className="landscape-label-full">{item.label}</span>
+                  <span className="hidden landscape-label-short">{item.shortLabel}</span>
                   {isActive && (
                     <span
                       className="absolute bottom-0 inset-x-0 h-0.5 rounded-full"
@@ -93,15 +94,15 @@ export const TopNav: React.FC<TopNavProps> = ({
           </nav>
 
           {/* Zone 3: Theme Switcher + Currencies + Primary Action */}
-          <div className="flex items-center gap-2 shrink-0">
+          <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
             <button
               type="button"
               onClick={onToggleSystemTheme}
               title="تبديل سمة واجهة المانهوا (النظام الملكي / الهاوية القرمزية)"
-              className="min-h-[38px] px-2.5 py-1.5 rounded-lg bg-[#0C1324] hover:bg-[#15203A] border border-white/15 text-xs font-bold text-[#F1F5F9] flex items-center gap-1.5 cursor-pointer whitespace-nowrap"
+              className="min-h-[34px] sm:min-h-[38px] px-2 sm:px-2.5 py-1 rounded-lg bg-[#0C1324] hover:bg-[#15203A] border border-white/15 text-xs font-bold text-[#F1F5F9] flex items-center gap-1.5 cursor-pointer whitespace-nowrap"
             >
               <Palette className="w-3.5 h-3.5" style={{ color: 'var(--sys-primary)' }} />
-              <span className="hidden sm:inline">
+              <span className="hidden md:inline">
                 {systemTheme === 'royal_cyan' ? 'النظام الملكي' : 'الهاوية البنفسجية'}
               </span>
             </button>
@@ -128,7 +129,7 @@ export const TopNav: React.FC<TopNavProps> = ({
             <button
               type="button"
               onClick={onQuickFight}
-              className="min-h-[38px] px-3 sm:px-4 py-2 text-xs sm:text-sm font-bold system-btn-primary rounded-lg transition-all whitespace-nowrap shrink-0 cursor-pointer flex items-center gap-1.5"
+              className="min-h-[36px] sm:min-h-[38px] px-2.5 sm:px-4 py-1.5 sm:py-2 text-xs sm:text-sm font-bold system-btn-primary rounded-lg transition-all whitespace-nowrap shrink-0 cursor-pointer flex items-center gap-1.5"
             >
               <Swords className="w-4 h-4" />
               <span>ابدأ القتال</span>
@@ -140,7 +141,7 @@ export const TopNav: React.FC<TopNavProps> = ({
       {/* Responsive Mobile Bottom Navigation Bar (< md, hidden in short horizontal phone landscape) */}
       <nav
         aria-label="التنقل السريع"
-        className="md:hidden landscape-phone-hide-bottom fixed bottom-0 inset-x-0 z-30 border-t backdrop-blur-xl px-1 py-1 grid grid-cols-5 gap-1"
+        className="md:hidden landscape-phone-hide-bottom fixed bottom-0 inset-x-0 z-30 border-t backdrop-blur-xl px-1 pt-1 pb-[max(0.25rem,var(--safe-bottom))] grid grid-cols-5 gap-1"
         style={{
           backgroundColor: 'var(--sys-surface-deep)',
           borderColor: 'var(--sys-border)',
@@ -154,7 +155,7 @@ export const TopNav: React.FC<TopNavProps> = ({
               key={`mob_${item.id}`}
               type="button"
               onClick={() => onNavigate(item.id)}
-              className={`min-h-[48px] px-1 py-1 rounded-lg flex flex-col items-center justify-center gap-0.5 text-[10px] font-bold transition-colors cursor-pointer ${
+              className={`min-h-[46px] px-1 py-1 rounded-lg flex flex-col items-center justify-center gap-0.5 text-[10px] font-bold transition-colors cursor-pointer ${
                 isActive ? 'text-[#F8FAFC] bg-white/10' : 'text-[#94A3B8]'
               }`}
               style={isActive ? { color: 'var(--sys-primary)' } : undefined}

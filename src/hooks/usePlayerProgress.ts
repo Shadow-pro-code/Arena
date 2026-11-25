@@ -11,11 +11,14 @@ import type {
   GearId,
   GearSlot,
   GraphicsQuality,
+  HudCustomizationConfig,
+  KeyBindingsConfig,
   MatchResult,
   OverworldNodeKind,
   PlayerProfile,
   PowerId,
   PowerSlots,
+  RenderEngineMode,
   SecretBossDef,
   StarterBlessing,
   StatKey,
@@ -23,6 +26,7 @@ import type {
   WeaponId,
   WorldEventZoneDef,
 } from '../types/game';
+import { DEFAULT_HUD_CONFIG, DEFAULT_KEY_BINDINGS } from '../data/controlDefaults';
 import {
   ACHIEVEMENT_DEFS,
   CONSUMABLES,
@@ -198,10 +202,18 @@ function createInitialProfile(): PlayerProfile {
     systemTheme: 'royal_cyan',
     soundEnabled: true,
     quality: 'balanced',
+    renderEngine: 'auto',
     cameraView: 'third_person',
     deviceMode: detectInitialDeviceMode(),
     landscapeLocked: false,
     favoriteArena: 'obsidian_citadel',
+    keyBindings: { ...DEFAULT_KEY_BINDINGS },
+    hudConfig: {
+      ...DEFAULT_HUD_CONFIG,
+      joystickOffset: { ...DEFAULT_HUD_CONFIG.joystickOffset },
+      actionsOffset: { ...DEFAULT_HUD_CONFIG.actionsOffset },
+      widgets: { ...DEFAULT_HUD_CONFIG.widgets },
+    },
   };
 }
 
@@ -309,6 +321,41 @@ function loadProfile(): PlayerProfile {
         parsed.systemTheme === 'crimson_abyss' || parsed.systemTheme === 'royal_cyan'
           ? parsed.systemTheme
           : 'royal_cyan',
+      quality:
+        parsed.quality === 'eco' ||
+        parsed.quality === 'balanced' ||
+        parsed.quality === 'high' ||
+        parsed.quality === 'ultra' ||
+        parsed.quality === 'mythic' ||
+        parsed.quality === 'impossible'
+          ? parsed.quality
+          : base.quality,
+      renderEngine:
+        parsed.renderEngine === 'auto' ||
+        parsed.renderEngine === 'canvas2d' ||
+        parsed.renderEngine === 'webgl'
+          ? parsed.renderEngine
+          : 'auto',
+      keyBindings: {
+        ...DEFAULT_KEY_BINDINGS,
+        ...(parsed.keyBindings && typeof parsed.keyBindings === 'object' ? parsed.keyBindings : {}),
+      },
+      hudConfig: {
+        ...DEFAULT_HUD_CONFIG,
+        ...(parsed.hudConfig && typeof parsed.hudConfig === 'object' ? parsed.hudConfig : {}),
+        joystickOffset: {
+          ...DEFAULT_HUD_CONFIG.joystickOffset,
+          ...(parsed.hudConfig?.joystickOffset || {}),
+        },
+        actionsOffset: {
+          ...DEFAULT_HUD_CONFIG.actionsOffset,
+          ...(parsed.hudConfig?.actionsOffset || {}),
+        },
+        widgets: {
+          ...DEFAULT_HUD_CONFIG.widgets,
+          ...(parsed.hudConfig?.widgets || {}),
+        },
+      },
       quests: mergedQuests,
     };
   } catch {
@@ -1375,6 +1422,10 @@ export function usePlayerProgress() {
     setProfile((prev) => ({ ...prev, quality }));
   }, []);
 
+  const setRenderEngine = useCallback((renderEngine: RenderEngineMode) => {
+    setProfile((prev) => ({ ...prev, renderEngine }));
+  }, []);
+
   const setCameraView = useCallback((cameraView: CameraViewMode) => {
     setProfile((prev) => ({ ...prev, cameraView }));
   }, []);
@@ -1393,6 +1444,36 @@ export function usePlayerProgress() {
 
   const setFavoriteArena = useCallback((favoriteArena: ArenaId) => {
     setProfile((prev) => ({ ...prev, favoriteArena }));
+  }, []);
+
+  const setKeyBindings = useCallback((nextBindings: KeyBindingsConfig) => {
+    setProfile((prev) => ({ ...prev, keyBindings: { ...nextBindings } }));
+  }, []);
+
+  const resetKeyBindings = useCallback(() => {
+    setProfile((prev) => ({ ...prev, keyBindings: { ...DEFAULT_KEY_BINDINGS } }));
+  }, []);
+
+  const setHudConfig = useCallback(
+    (updater: HudCustomizationConfig | ((prev: HudCustomizationConfig) => HudCustomizationConfig)) => {
+      setProfile((prev) => ({
+        ...prev,
+        hudConfig: typeof updater === 'function' ? updater(prev.hudConfig) : updater,
+      }));
+    },
+    []
+  );
+
+  const resetHudConfig = useCallback(() => {
+    setProfile((prev) => ({
+      ...prev,
+      hudConfig: {
+        ...DEFAULT_HUD_CONFIG,
+        joystickOffset: { ...DEFAULT_HUD_CONFIG.joystickOffset },
+        actionsOffset: { ...DEFAULT_HUD_CONFIG.actionsOffset },
+        widgets: { ...DEFAULT_HUD_CONFIG.widgets },
+      },
+    }));
   }, []);
 
   return {
@@ -1434,10 +1515,15 @@ export function usePlayerProgress() {
     buyChest,
     setSystemTheme,
     setQuality,
+    setRenderEngine,
     setCameraView,
     setSoundEnabled,
     setDeviceMode,
     setLandscapeLocked,
     setFavoriteArena,
+    setKeyBindings,
+    resetKeyBindings,
+    setHudConfig,
+    resetHudConfig,
   };
 }

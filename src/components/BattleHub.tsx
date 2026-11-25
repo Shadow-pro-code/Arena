@@ -6,11 +6,13 @@ import {
   Compass,
   Cpu,
   Flame,
+  Layers,
   Lock,
   Maximize2,
   Monitor,
   Radar,
   Shield,
+  Sliders,
   Smartphone,
   Sparkles,
   Swords,
@@ -26,6 +28,7 @@ import type {
   GameMode,
   GraphicsQuality,
   PlayerProfile,
+  RenderEngineMode,
 } from '../types/game';
 import {
   ARENAS,
@@ -37,6 +40,13 @@ import {
   getRankLabel,
   xpForNextLevel,
 } from '../data/gameCatalog';
+import {
+  DEFAULT_KEY_BINDINGS,
+  QUALITY_LEVELS,
+  RENDER_ENGINE_OPTIONS,
+  formatKeyCodeLabel,
+} from '../data/controlDefaults';
+import { detectWebGLCapability, resolveRenderEngine } from '../engine/webglCapability';
 import { AvatarPreview3D } from './AvatarPreview3D';
 import { StatsRadarChart } from './StatsRadarChart';
 
@@ -50,7 +60,9 @@ interface BattleHubProps {
   onStartCombat: (mode: GameMode, arenaId: ArenaId) => void;
   onNavigate: (dest: AppDestination) => void;
   onOpenStory: () => void;
+  onOpenCustomizer?: () => void;
   onChangeQuality: (q: GraphicsQuality) => void;
+  onChangeRenderEngine?: (mode: RenderEngineMode) => void;
   onChangeCamera: (c: CameraViewMode) => void;
   onChangeDeviceMode: (d: DeviceMode) => void;
   onToggleLandscape?: (locked: boolean) => void;
@@ -84,14 +96,6 @@ const MODES: { id: GameMode; title: string; subtitle: string; meta: string }[] =
   },
 ];
 
-const QUALITY_OPTIONS: { id: GraphicsQuality; label: string }[] = [
-  { id: 'eco', label: 'اقتصادي' },
-  { id: 'balanced', label: 'متوازن' },
-  { id: 'high', label: 'عالي' },
-  { id: 'ultra', label: 'فائق' },
-  { id: 'mythic', label: 'أسطوري' },
-];
-
 const CAMERA_OPTIONS: { id: CameraViewMode; label: string }[] = [
   { id: 'third_person', label: 'الشخص الثالث' },
   { id: 'over_shoulder', label: 'خلف الكتف' },
@@ -100,8 +104,6 @@ const CAMERA_OPTIONS: { id: CameraViewMode; label: string }[] = [
   { id: 'top_tactical', label: 'علوي تكتيكي' },
   { id: 'cinematic_free', label: 'سينمائي حر' },
 ];
-
-const SKILL_KEYS = ['Q', 'R', 'Z', 'X'] as const;
 
 export const BattleHub: React.FC<BattleHubProps> = ({
   profile,
@@ -113,7 +115,9 @@ export const BattleHub: React.FC<BattleHubProps> = ({
   onStartCombat,
   onNavigate,
   onOpenStory,
+  onOpenCustomizer,
   onChangeQuality,
+  onChangeRenderEngine,
   onChangeCamera,
   onChangeDeviceMode,
   onToggleLandscape,
@@ -122,6 +126,17 @@ export const BattleHub: React.FC<BattleHubProps> = ({
   const [previewAct, setPreviewAct] = useState<'idle' | 'attack' | 'power'>('idle');
   const [heroPanelMode, setHeroPanelMode] = useState<'avatar' | 'radar'>('avatar');
   const [imgErrors, setImgErrors] = useState<Record<string, boolean>>({});
+
+  const kb = profile.keyBindings || DEFAULT_KEY_BINDINGS;
+  const skillKeys = [
+    formatKeyCodeLabel(kb.skill0),
+    formatKeyCodeLabel(kb.skill1),
+    formatKeyCodeLabel(kb.skill2),
+    formatKeyCodeLabel(kb.skill3),
+  ];
+  const webglCap = detectWebGLCapability();
+  const renderMode = profile.renderEngine || 'auto';
+  const activeEngine = resolveRenderEngine(renderMode);
 
   const arena = ARENAS[selectedArena];
   const weapon = WEAPONS[profile.avatar.weaponId];
@@ -132,9 +147,9 @@ export const BattleHub: React.FC<BattleHubProps> = ({
   const xpPct = Math.min(100, Math.round((profile.xp / nextXp) * 100));
 
   return (
-    <main className="max-w-[1360px] mx-auto px-4 sm:px-6 py-6 sm:py-8 space-y-9">
+    <main className="ui-shell-container space-y-[var(--ui-section-gap)]">
       {/* Compact Isekai Guild Profile & Engine Bar */}
-      <section className="isekai-panel rounded-2xl p-4 flex flex-wrap items-center justify-between gap-4">
+      <section className="isekai-panel rounded-2xl p-3.5 sm:p-4 flex flex-wrap items-center justify-between gap-3 sm:gap-4">
         <div className="flex flex-wrap items-center gap-x-5 gap-y-2 text-sm">
           <div>
             <span className="text-[#94A3B8]">المستوى </span>
@@ -226,15 +241,48 @@ export const BattleHub: React.FC<BattleHubProps> = ({
             </button>
           )}
 
-          <div className="flex items-center gap-1 px-2 py-1 bg-[#0B1220] border border-white/10 rounded-lg">
+          {onChangeRenderEngine && (
+            <div
+              className="flex items-center gap-1 px-2 py-1 bg-[#0B1220] border border-[#E6B85C]/30 rounded-lg max-w-full min-w-0"
+              title={
+                webglCap.supported
+                  ? `بطاقة مكتشفة: ${webglCap.rendererName} (WebGL ${webglCap.version})`
+                  : 'WebGL غير متاح — المحرك الخفيف يعمل تلقائياً'
+              }
+            >
+              <Layers className="w-3.5 h-3.5 text-[#E6B85C] shrink-0" />
+              <select
+                aria-label="محرك الرسوميات المستقل"
+                value={renderMode}
+                onChange={(e) => onChangeRenderEngine(e.target.value as RenderEngineMode)}
+                className="bg-transparent text-xs font-semibold text-[#F1F5F9] focus:outline-none cursor-pointer pr-1 min-w-0 max-w-full truncate"
+              >
+                {RENDER_ENGINE_OPTIONS.map((opt) => (
+                  <option
+                    key={opt.id}
+                    value={opt.id}
+                    disabled={opt.id === 'webgl' && !webglCap.supported}
+                    className="bg-[#0D1422] text-[#F1F5F9]"
+                  >
+                    المحرك: {opt.label}
+                    {opt.id === 'auto'
+                      ? ` (${activeEngine === 'webgl' ? 'WebGL' : 'خفيف'})`
+                      : ''}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
+
+          <div className="flex items-center gap-1 px-2 py-1 bg-[#0B1220] border border-white/10 rounded-lg max-w-full min-w-0">
             <Cpu className="w-3.5 h-3.5 text-[#38BDF8] shrink-0" />
             <select
               aria-label="جودة الرسوم والأداء"
               value={profile.quality}
               onChange={(e) => onChangeQuality(e.target.value as GraphicsQuality)}
-              className="bg-transparent text-xs font-semibold text-[#F1F5F9] focus:outline-none cursor-pointer pr-1"
+              className="bg-transparent text-xs font-semibold text-[#F1F5F9] focus:outline-none cursor-pointer pr-1 min-w-0 max-w-full truncate"
             >
-              {QUALITY_OPTIONS.map((q) => (
+              {QUALITY_LEVELS.map((q) => (
                 <option key={q.id} value={q.id} className="bg-[#0D1422] text-[#F1F5F9]">
                   الجودة: {q.label}
                 </option>
@@ -242,13 +290,13 @@ export const BattleHub: React.FC<BattleHubProps> = ({
             </select>
           </div>
 
-          <div className="flex items-center gap-1 px-2 py-1 bg-[#0B1220] border border-white/10 rounded-lg">
+          <div className="flex items-center gap-1 px-2 py-1 bg-[#0B1220] border border-white/10 rounded-lg max-w-full min-w-0">
             <Camera className="w-3.5 h-3.5 text-[#E6B85C] shrink-0" />
             <select
               aria-label="زاوية الكاميرا ثلاثية الأبعاد"
               value={profile.cameraView}
               onChange={(e) => onChangeCamera(e.target.value as CameraViewMode)}
-              className="bg-transparent text-xs font-semibold text-[#F1F5F9] focus:outline-none cursor-pointer pr-1"
+              className="bg-transparent text-xs font-semibold text-[#F1F5F9] focus:outline-none cursor-pointer pr-1 min-w-0 max-w-full truncate"
             >
               {CAMERA_OPTIONS.map((c) => (
                 <option key={c.id} value={c.id} className="bg-[#0D1422] text-[#F1F5F9]">
@@ -257,6 +305,17 @@ export const BattleHub: React.FC<BattleHubProps> = ({
               ))}
             </select>
           </div>
+
+          {onOpenCustomizer && (
+            <button
+              type="button"
+              onClick={onOpenCustomizer}
+              className="px-2.5 py-1.5 text-xs font-bold text-[#38BDF8] bg-[#0B1220] hover:bg-[#14213A] border border-[#38BDF8]/35 rounded-lg flex items-center gap-1.5 whitespace-nowrap cursor-pointer transition-colors"
+            >
+              <Sliders className="w-3.5 h-3.5" />
+              <span>تخصيص التحكم والواجهة</span>
+            </button>
+          )}
 
           <button
             type="button"
@@ -270,18 +329,22 @@ export const BattleHub: React.FC<BattleHubProps> = ({
       </section>
 
       {/* Main 2-Column Hero Split */}
-      <section className="grid grid-cols-1 lg:grid-cols-12 gap-7 items-stretch">
+      <section className="grid grid-cols-1 lg:grid-cols-12 landscape-split-12 gap-7 items-stretch">
         {/* Right Column (in RTL): Setup & Launch */}
-        <div className="lg:col-span-7 flex flex-col justify-between space-y-6">
+        <div className="lg:col-span-7 landscape-span-7 flex flex-col justify-between space-y-6">
           <div className="space-y-3">
             <p className="text-xs font-semibold text-[#38BDF8] flex flex-wrap items-center gap-2">
-              <span>محرك 3D ناعم بدون WebGL2 (5 مستويات جودة · 6 زوايا عرض)</span>
+              <span>
+                محرك ثنائي (WebGL 1/2 ناعم + Canvas2D خفيف) · 6 مستويات حتى المستحيلة · 6 زوايا كاميرا 360°
+              </span>
               <span className="text-[#475569]">·</span>
               <span className="text-[#E6B85C]">
-                {profile.deviceMode === 'mobile' ? 'هاتف (مُحسَّن للوضع الأفقي)' : 'حاسوب (استجابة فورية)'}
+                {activeEngine === 'webgl'
+                  ? `النشط: WebGL ${webglCap.version || 1}${webglCap.isSoftwareGl ? ' (وضع التوافق)' : ' GPU'}`
+                  : 'النشط: المحرك الخفيف Canvas2D'}
               </span>
             </p>
-            <h1 className="font-display text-3xl sm:text-5xl font-extrabold leading-tight text-[#F8FAFC] max-w-2xl">
+            <h1 className="font-display ui-hero-title font-extrabold text-[#F8FAFC] max-w-2xl">
               ميثاق إيثيريا: قاتل، اعمل في النقابة، وافتح القارة
             </h1>
             <p className="text-[#94A3B8] text-sm sm:text-base leading-relaxed max-w-xl">
@@ -376,7 +439,7 @@ export const BattleHub: React.FC<BattleHubProps> = ({
                         <span className="truncate">{isUnlockedSlot ? pw?.name : 'خانة مقفلة'}</span>
                       </span>
                       <span className="font-mono-num font-bold text-[#E6B85C] shrink-0">
-                        [{SKILL_KEYS[idx]}]
+                        [{skillKeys[idx]}]
                       </span>
                     </div>
                   );
@@ -428,7 +491,7 @@ export const BattleHub: React.FC<BattleHubProps> = ({
         </div>
 
         {/* Left Column (in RTL): Live Interactive 3D Avatar + 8-Stat Radar Toggle */}
-        <div className="lg:col-span-5 flex flex-col isekai-panel rounded-2xl overflow-hidden">
+        <div className="lg:col-span-5 landscape-span-5 flex flex-col isekai-panel rounded-2xl overflow-hidden">
           <div className="flex items-center justify-between px-4 py-3 border-b border-[#E6B85C]/20 bg-[#0A101E]/60">
             <div>
               <h3 className="font-display text-base font-bold text-[#F8FAFC]">
@@ -482,12 +545,14 @@ export const BattleHub: React.FC<BattleHubProps> = ({
           {heroPanelMode === 'avatar' ? (
             <AvatarPreview3D
               avatar={profile.avatar}
+              quality={profile.quality}
+              renderEngine={profile.renderEngine}
               weaponLevel={weaponLv}
               previewAction={previewAct}
-              className="flex-1 min-h-[300px] lg:min-h-[350px]"
+              className="flex-1 h-[clamp(240px,38dvh,380px)] lg:h-auto lg:min-h-[360px] landscape-preview-box"
             />
           ) : (
-            <div className="flex-1 min-h-[300px] lg:min-h-[350px] bg-[#0B1220]/70 flex flex-col items-center justify-center p-4">
+            <div className="flex-1 min-h-[240px] lg:min-h-[360px] landscape-preview-box bg-[#0B1220]/70 flex flex-col items-center justify-center p-4">
               <StatsRadarChart stats={profile.avatar.stats} compact />
               <div className="flex items-center gap-3 text-[11px] text-[#94A3B8] mt-1">
                 <span>سرعة الضرب: <strong className="font-mono-num text-[#E6B85C]">{derived.attackSpeedMult}x</strong></span>
@@ -575,8 +640,8 @@ export const BattleHub: React.FC<BattleHubProps> = ({
       </section>
 
       {/* Main 100x Larger Overworld Open Continent Showcase Card */}
-      <section className="isekai-panel rounded-2xl overflow-hidden grid grid-cols-1 lg:grid-cols-12 items-stretch">
-        <div className="lg:col-span-5 relative min-h-[240px] bg-[#0D1422]">
+      <section className="isekai-panel rounded-2xl overflow-hidden grid grid-cols-1 lg:grid-cols-12 landscape-split-12 items-stretch">
+        <div className="lg:col-span-5 landscape-span-5 relative min-h-[200px] sm:min-h-[240px] bg-[#0D1422]">
           <img
             src={OVERWORLD_MAP.imagePath}
             alt={OVERWORLD_MAP.name}
@@ -588,7 +653,7 @@ export const BattleHub: React.FC<BattleHubProps> = ({
             100× توسّع · 9 أحجار انتقال سريع [M]
           </div>
         </div>
-        <div className="lg:col-span-7 p-5 sm:p-7 flex flex-col justify-between gap-5">
+        <div className="lg:col-span-7 landscape-span-7 p-4 sm:p-7 flex flex-col justify-between gap-4 sm:gap-5">
           <div className="space-y-2.5">
             <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
               <span className="font-semibold text-[#38BDF8] flex items-center gap-1.5">
@@ -618,8 +683,15 @@ export const BattleHub: React.FC<BattleHubProps> = ({
 
           <div className="flex flex-wrap items-center justify-between gap-3 pt-1">
             <span className="text-xs text-[#94A3B8]">
-              تفاعل <strong className="font-mono-num text-[#F8FAFC]">[G]</strong> لجمع الأعشاب والمعادن، التعاقد مع الشخصيات المسالمة الخمس، واضغط{' '}
-              <strong className="font-mono-num text-[#38BDF8]">[M]</strong> للانتقال السريع.
+              تفاعل{' '}
+              <strong className="font-mono-num text-[#F8FAFC]">
+                [{formatKeyCodeLabel(kb.interact)}]
+              </strong>{' '}
+              لجمع الأعشاب والمعادن، التعاقد مع الشخصيات المسالمة الخمس، واضغط{' '}
+              <strong className="font-mono-num text-[#38BDF8]">
+                [{formatKeyCodeLabel(kb.map)}]
+              </strong>{' '}
+              للانتقال السريع.
             </span>
             <button
               type="button"
@@ -637,7 +709,7 @@ export const BattleHub: React.FC<BattleHubProps> = ({
       <section className="space-y-6">
         <div className="flex flex-wrap items-end justify-between gap-3">
           <div>
-            <h2 className="font-display text-2xl font-bold text-[#F8FAFC]">
+            <h2 className="font-display ui-section-title font-bold text-[#F8FAFC]">
               ساحات المعارك الست الكبرى وتضاريسها التكتيكية
             </h2>
             <p className="text-sm text-[#94A3B8] mt-1">
@@ -653,7 +725,7 @@ export const BattleHub: React.FC<BattleHubProps> = ({
           </div>
         </div>
 
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 landscape-grid-2 gap-4 sm:gap-5">
           {ARENA_LIST.map((item) => {
             const isSelected = selectedArena === item.id;
             const bonusPct = Math.round((item.rewardMultiplier - 1) * 100);
@@ -714,8 +786,8 @@ export const BattleHub: React.FC<BattleHubProps> = ({
         </div>
 
         {/* Selected Arena Detailed Map & 3D Component Breakdown */}
-        <div className="isekai-panel rounded-2xl p-5 sm:p-6 grid grid-cols-1 lg:grid-cols-12 gap-6 items-center">
-          <div className="lg:col-span-4 flex flex-col items-center justify-center bg-[#0B1220] border border-white/10 rounded-xl p-4 space-y-3">
+        <div className="isekai-panel rounded-2xl p-4 sm:p-6 grid grid-cols-1 lg:grid-cols-12 landscape-split-12 gap-4 sm:gap-6 items-center">
+          <div className="lg:col-span-4 landscape-span-4 flex flex-col items-center justify-center bg-[#0B1220] border border-white/10 rounded-xl p-3 sm:p-4 space-y-2.5 sm:space-y-3">
             <div className="w-full flex items-center justify-between text-xs text-[#94A3B8]">
               <span className="flex items-center gap-1.5 font-semibold text-[#F8FAFC]">
                 <Compass className="w-3.5 h-3.5 text-[#E6B85C]" />
@@ -726,7 +798,7 @@ export const BattleHub: React.FC<BattleHubProps> = ({
 
             <svg
               viewBox={`${-(arena.radius + 4)} ${-(arena.radius + 4)} ${(arena.radius + 4) * 2} ${(arena.radius + 4) * 2}`}
-              className="w-48 h-48 overflow-visible"
+              className="w-48 h-48 landscape-svg-compact overflow-visible"
               aria-label={`مخطط ساحة ${arena.name}`}
             >
               <circle cx={0} cy={0} r={arena.radius + 2.2} fill={arena.platformWall} stroke="rgba(255,255,255,0.08)" strokeWidth={0.9} />
@@ -795,7 +867,7 @@ export const BattleHub: React.FC<BattleHubProps> = ({
             </div>
           </div>
 
-          <div className="lg:col-span-8 space-y-4">
+          <div className="lg:col-span-8 landscape-span-8 space-y-3 sm:space-y-4">
             <div className="flex flex-wrap items-center justify-between gap-2 pb-3 border-b border-white/10">
               <div>
                 <h3 className="font-display text-xl font-bold text-[#F8FAFC]">
