@@ -334,6 +334,21 @@ export class WebGLRenderer3D {
   private sharedBoltGeo = new THREE.CylinderGeometry(0.14, 0.24, 14, 6);
   private sharedPickupGeo = new THREE.OctahedronGeometry(0.42, 0);
   private sharedShadowGeo = new THREE.PlaneGeometry(2.1, 2.1);
+  private lockOnGroup = new THREE.Group();
+  private lockOnOuterMat = new THREE.MeshBasicMaterial({
+    color: '#38BDF8',
+    transparent: true,
+    opacity: 0.9,
+    side: THREE.DoubleSide,
+    depthWrite: false,
+  });
+  private lockOnInnerMat = new THREE.MeshBasicMaterial({
+    color: '#FDE047',
+    transparent: true,
+    opacity: 0.78,
+    side: THREE.DoubleSide,
+    depthWrite: false,
+  });
 
   private currentWidth = 1280;
   private currentHeight = 720;
@@ -425,6 +440,15 @@ export class WebGLRenderer3D {
     this.particleInstanced.frustumCulled = false;
     this.particleInstanced.count = 0;
     this.vfxGroup.add(this.particleInstanced);
+
+    const outerLock = new THREE.Mesh(this.sharedRingGeo, this.lockOnOuterMat);
+    outerLock.rotation.x = -Math.PI / 2;
+    const innerLock = new THREE.Mesh(this.sharedRingGeo, this.lockOnInnerMat);
+    innerLock.rotation.x = -Math.PI / 2;
+    innerLock.scale.setScalar(0.72);
+    this.lockOnGroup.add(outerLock, innerLock);
+    this.lockOnGroup.visible = false;
+    this.vfxGroup.add(this.lockOnGroup);
 
     this.applyQualityRenderSettings(initialQuality);
   }
@@ -1449,7 +1473,7 @@ export class WebGLRenderer3D {
     for (const f of payload.fighters) {
       activeFighters.add(f.id);
       let rig = this.fighterRigs.get(f.id);
-      const expectedSig = `${f.avatar.weaponId}|${f.avatar.headStyle}|${f.avatar.armorStyle}|${f.avatar.backGear}|${f.avatar.primaryColor}|${f.avatar.secondaryColor}|${f.avatar.accentColor}|${f.avatar.skinTone}|${f.avatar.heightScale}|${f.avatar.shoulderScale}|${f.avatar.build}`;
+      const expectedSig = `${f.avatar.weaponId}|${f.avatar.headStyle}|${f.avatar.armorStyle}|${f.avatar.backGear}|${f.avatar.primaryColor}|${f.avatar.secondaryColor}|${f.avatar.accentColor}|${f.avatar.skinTone}|${f.avatar.heightScale}|${f.avatar.shoulderScale}|${f.avatar.build}|${f.avatar.materialFinish || 'matte'}`;
       if (!rig || rig.signature !== expectedSig) {
         if (rig) {
           this.entitiesGroup.remove(rig.root);
@@ -1521,16 +1545,28 @@ export class WebGLRenderer3D {
       rig.shieldSphere.visible = f.shieldActive;
       if (f.shieldActive) rig.shieldSphere.rotation.y = payload.time * 1.4;
 
-      // Hit flash / Overdrive emissive
+      // Hit flash / Parry / Overdrive / Elemental emissive
       if (f.hitFlash > 0) {
         rig.bodyMat.emissive.setHex(0xffffff);
         rig.bodyMat.emissiveIntensity = f.hitFlash * 0.8;
+      } else if ((f.parryFlash ?? 0) > 0) {
+        rig.bodyMat.emissive.set('#FDE047');
+        rig.bodyMat.emissiveIntensity = 0.72 * (f.parryFlash ?? 0);
       } else if (f.overdriveActive) {
         rig.bodyMat.emissive.set('#F59E0B');
         rig.bodyMat.emissiveIntensity = 0.32;
       } else if (f.frozenTimer > 0) {
         rig.bodyMat.emissive.set('#38BDF8');
         rig.bodyMat.emissiveIntensity = 0.35;
+      } else if ((f.burningTimer ?? 0) > 0) {
+        rig.bodyMat.emissive.set('#F97316');
+        rig.bodyMat.emissiveIntensity = 0.38;
+      } else if ((f.shockedTimer ?? 0) > 0) {
+        rig.bodyMat.emissive.set('#67E8F9');
+        rig.bodyMat.emissiveIntensity = 0.34;
+      } else if (f.avatar.materialFinish === 'runic') {
+        rig.bodyMat.emissive.set(f.avatar.accentColor || '#38BDF8');
+        rig.bodyMat.emissiveIntensity = 0.16;
       } else {
         rig.bodyMat.emissive.setHex(0x000000);
         rig.bodyMat.emissiveIntensity = 0;
@@ -1587,10 +1623,30 @@ export class WebGLRenderer3D {
       } else if (m.frozenTimer > 0) {
         rig.primaryMat.emissive.set('#38BDF8');
         rig.primaryMat.emissiveIntensity = 0.45;
+      } else if ((m.burningTimer ?? 0) > 0) {
+        rig.primaryMat.emissive.set('#EA580C');
+        rig.primaryMat.emissiveIntensity = 0.48;
+      } else if ((m.shockedTimer ?? 0) > 0) {
+        rig.primaryMat.emissive.set('#38BDF8');
+        rig.primaryMat.emissiveIntensity = 0.42;
+      } else if (m.enraged) {
+        rig.primaryMat.emissive.set('#DC2626');
+        rig.primaryMat.emissiveIntensity = 0.28 + Math.sin(payload.time * 8) * 0.12;
       } else {
         rig.primaryMat.emissive.setHex(0x000000);
         rig.primaryMat.emissiveIntensity = 0;
       }
+    }
+
+    if (payload.lockedTargetPos) {
+      const lp = payload.lockedTargetPos;
+      this.lockOnGroup.visible = true;
+      this.lockOnGroup.position.set(lp.x, lp.y + 0.08, lp.z);
+      this.lockOnGroup.rotation.y = payload.time * 2.1;
+      const pulse = lp.radius + Math.sin(payload.time * 6) * 0.12;
+      this.lockOnGroup.scale.setScalar(Math.max(0.5, pulse));
+    } else {
+      this.lockOnGroup.visible = false;
     }
 
     for (const [id, rig] of this.monsterRigs.entries()) {
@@ -1993,6 +2049,8 @@ export class WebGLRenderer3D {
     this.sharedPickupGeo.dispose();
     this.sharedShadowGeo.dispose();
     this.sharedShadowTex.dispose();
+    this.lockOnOuterMat.dispose();
+    this.lockOnInnerMat.dispose();
 
     for (const tex of this.surfaceTextures.values()) tex.dispose();
     this.surfaceTextures.clear();
@@ -2177,15 +2235,19 @@ function buildUnifiedFighterRig(
   auraRing.position.y = 0.04;
   root.add(auraRing);
 
+  const finish = av.materialFinish || 'matte';
+  const baseMetal = av.armorStyle === 'plate' || av.armorStyle === 'paladin_aegis' ? 0.65 : 0.25;
   const bodyMat = new THREE.MeshStandardMaterial({
     color: av.primaryColor,
-    roughness: 0.42,
-    metalness: av.armorStyle === 'plate' || av.armorStyle === 'paladin_aegis' ? 0.65 : 0.25,
+    roughness: finish === 'metallic' ? 0.18 : finish === 'runic' ? 0.28 : 0.56,
+    metalness: finish === 'metallic' ? 0.86 : finish === 'runic' ? 0.52 : baseMetal * 0.65,
+    emissive: finish === 'runic' ? av.accentColor || '#38BDF8' : '#000000',
+    emissiveIntensity: finish === 'runic' ? 0.16 : 0,
   });
   const trimMat = new THREE.MeshStandardMaterial({
     color: av.secondaryColor,
-    roughness: 0.3,
-    metalness: 0.6,
+    roughness: finish === 'metallic' ? 0.16 : 0.3,
+    metalness: finish === 'metallic' ? 0.88 : 0.6,
   });
   const accentMat = new THREE.MeshStandardMaterial({
     color: av.accentColor,
@@ -2425,7 +2487,7 @@ function buildUnifiedFighterRig(
   shieldSphere.visible = false;
   tiltGroup.add(shieldSphere);
 
-  const sig = `${av.weaponId}|${weaponLevel}|${av.headStyle}|${av.armorStyle}|${av.backGear}|${av.primaryColor}|${av.secondaryColor}|${av.accentColor}|${av.skinTone}|${av.heightScale}|${av.shoulderScale}|${av.build}|${av.eyeGlow}|${av.helmetColor}`;
+  const sig = `${av.weaponId}|${weaponLevel}|${av.headStyle}|${av.armorStyle}|${av.backGear}|${av.primaryColor}|${av.secondaryColor}|${av.accentColor}|${av.skinTone}|${av.heightScale}|${av.shoulderScale}|${av.build}|${av.eyeGlow}|${av.helmetColor}|${av.materialFinish || 'matte'}`;
   return {
     signature: sig,
     root,
@@ -2754,7 +2816,7 @@ export class WebGLAvatarShowcase {
   ) {
     if (this.disposed || this.contextLost) return;
 
-    const sig = `${avatar.weaponId}|${weaponLevel}|${avatar.headStyle}|${avatar.armorStyle}|${avatar.backGear}|${avatar.primaryColor}|${avatar.secondaryColor}|${avatar.accentColor}|${avatar.skinTone}|${avatar.heightScale}|${avatar.shoulderScale}|${avatar.build}|${avatar.eyeGlow}|${avatar.helmetColor}`;
+    const sig = `${avatar.weaponId}|${weaponLevel}|${avatar.headStyle}|${avatar.armorStyle}|${avatar.backGear}|${avatar.primaryColor}|${avatar.secondaryColor}|${avatar.accentColor}|${avatar.skinTone}|${avatar.heightScale}|${avatar.shoulderScale}|${avatar.build}|${avatar.eyeGlow}|${avatar.helmetColor}|${avatar.materialFinish || 'matte'}`;
     if (!this.rig || this.rig.signature !== sig) {
       if (this.rig) {
         this.scene.remove(this.rig.root);
@@ -2792,7 +2854,7 @@ export class WebGLAvatarShowcase {
       this.slashMesh.visible = alpha > 0.05;
       this.slashMesh.position.y = 1.18 * h;
       this.slashMesh.rotation.z = Math.sin(animTime * 12) * 0.2;
-      this.slashMat.color.set((WEAPONS[avatar.weaponId] || WEAPONS.vanguard_sword).energyColor);
+      this.slashMat.color.set(avatar.slashColor || (WEAPONS[avatar.weaponId] || WEAPONS.vanguard_sword).energyColor);
       this.slashMat.opacity = alpha;
       this.powerRing.visible = false;
       rig.shieldSphere.visible = false;

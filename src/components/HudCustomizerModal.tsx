@@ -295,6 +295,30 @@ export const HudCustomizerModal: React.FC<HudCustomizerModalProps> = ({
                 </button>
               </div>
 
+              <div className="flex flex-wrap items-center justify-between gap-2 p-3 rounded-xl bg-white/5 border border-white/10">
+                <div>
+                  <div className="font-bold text-sm">الشرب التلقائي لجرعة الشفاء (&lt;25% صحة)</div>
+                  <div className="text-[11px] text-slate-400">
+                    يستهلك جرعة الشفاء تلقائياً عند انخفاض صحتك للحد الحرج (يتعطّل في تحدي بلا جرعات)
+                  </div>
+                </div>
+                <button
+                  onClick={() =>
+                    onChangeHudConfig({
+                      ...hudConfig,
+                      autoDrinkHeal: !(hudConfig.autoDrinkHeal ?? true),
+                    })
+                  }
+                  className={`px-3.5 py-1.5 rounded-lg text-xs font-bold border ${
+                    (hudConfig.autoDrinkHeal ?? true)
+                      ? 'bg-emerald-500/20 border-emerald-400 text-emerald-200'
+                      : 'bg-white/10 border-white/15 text-slate-300'
+                  }`}
+                >
+                  {(hudConfig.autoDrinkHeal ?? true) ? 'مُفعّل تلقائياً' : 'يدوي فقط'}
+                </button>
+              </div>
+
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                 <div className="p-3 rounded-xl bg-white/5 border border-white/10">
                   <div className="flex justify-between text-xs font-bold mb-2">

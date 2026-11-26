@@ -28,6 +28,10 @@ export const DEFAULT_KEY_BINDINGS: KeyBindingsConfig = {
   potion1: 'Digit1',
   potion2: 'Digit2',
   potion3: 'Digit3',
+  potion4: 'Digit4',
+  quickSwap: 'KeyB',
+  swapDeck: 'KeyN',
+  lockOn: 'KeyT',
 };
 
 export const KEY_ACTION_LABELS: { id: KeyActionId; label: string; group: 'movement' | 'combat' | 'utility' }[] = [
@@ -40,7 +44,10 @@ export const KEY_ACTION_LABELS: { id: KeyActionId; label: string; group: 'moveme
   { id: 'dodge', label: 'مراوغة / دحرجة (تُدمج مع الهجوم)', group: 'combat' },
   { id: 'attack', label: 'هجوم أساسي (+ نقر الفأرة الأيسر)', group: 'combat' },
   { id: 'heavy', label: 'ضربة ثقيلة (+ نقر الفأرة الأيمن)', group: 'combat' },
-  { id: 'block', label: 'صدّ ودفاع', group: 'combat' },
+  { id: 'block', label: 'صدّ ودفاع / صدّ مثالي', group: 'combat' },
+  { id: 'lockOn', label: 'تثبيت الهدف القريب', group: 'combat' },
+  { id: 'quickSwap', label: 'التبديل السريع للمهارات', group: 'combat' },
+  { id: 'swapDeck', label: 'تبديل طقم المهارات (1 ↔ 2)', group: 'combat' },
   { id: 'skill0', label: 'المهارة 1', group: 'combat' },
   { id: 'skill1', label: 'المهارة 2', group: 'combat' },
   { id: 'skill2', label: 'المهارة 3', group: 'combat' },
@@ -50,8 +57,9 @@ export const KEY_ACTION_LABELS: { id: KeyActionId; label: string; group: 'moveme
   { id: 'camera', label: 'تبديل زاوية الكاميرا', group: 'utility' },
   { id: 'toggleHud', label: 'إخفاء/إظهار واجهة القتال', group: 'utility' },
   { id: 'potion1', label: 'جرعة الشفاء', group: 'utility' },
-  { id: 'potion2', label: 'لفيفة الطاقة', group: 'utility' },
+  { id: 'potion2', label: 'لفيفة الطاقة والمانا', group: 'utility' },
   { id: 'potion3', label: 'إكسير الغضب', group: 'utility' },
+  { id: 'potion4', label: 'الأداة التكتيكية السريعة', group: 'utility' },
 ];
 
 export const DEFAULT_HUD_CONFIG: HudCustomizationConfig = {
@@ -59,6 +67,7 @@ export const DEFAULT_HUD_CONFIG: HudCustomizationConfig = {
   hudScale: 1,
   hudOpacity: 0.92,
   cameraSensitivity: 1,
+  autoDrinkHeal: true,
   mobilePreset: 'standard',
   mobileButtonsScale: 1,
   joystickOffset: { x: 0, y: 0 },

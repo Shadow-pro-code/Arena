@@ -106,8 +106,8 @@ export function renderUnifiedFighterMesh(
   const hScale = av.heightScale * overdriveScale;
   const buildWidth =
     (av.build === 'heavy' ? 1.2 : av.build === 'agile' ? 0.86 : 1.0) * av.shoulderScale * overdriveScale;
-  const flash = fighter.hitFlash;
-  const freeze = fighter.frozenTimer > 0 ? 1 : 0;
+  const flash = Math.max(fighter.hitFlash, (fighter.parryFlash ?? 0) * 0.85);
+  const freeze = fighter.frozenTimer > 0 ? 1 : (fighter.shockedTimer ?? 0) > 0 ? 0.5 : 0;
 
   const isMoving = fighter.animState === 'run';
   const isAttack = fighter.animState === 'attack' || fighter.animState === 'heavy';
@@ -1118,8 +1118,8 @@ export function renderUnifiedMonsterMesh(
   const segs = Math.max(6, host.getSegCount(quality) - 2);
   const def = MONSTERS[m.archetype] || MONSTERS.ash_stalker;
   const s = def.scale;
-  const flash = m.hitFlash;
-  const freeze = m.frozenTimer > 0 ? 1 : 0;
+  const flash = Math.max(m.hitFlash, (m.burningTimer ?? 0) > 0 ? 0.14 + Math.sin(time * 16) * 0.1 : 0);
+  const freeze = m.frozenTimer > 0 ? 1 : (m.shockedTimer ?? 0) > 0 ? 0.55 : 0;
   const stride = Math.sin(m.walkPhase * 9);
   const bob = Math.abs(Math.cos(m.walkPhase * 9)) * 0.08 * s;
   const origin: Vec3 = { x: m.x, y: m.y + bob, z: m.z };

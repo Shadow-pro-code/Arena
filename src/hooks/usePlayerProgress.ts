@@ -3,8 +3,10 @@ import type {
   AchievementMetric,
   ArenaId,
   AvatarConfig,
+  AvatarLoadoutSlot,
   CameraViewMode,
   ConsumableId,
+  CustomSkillDef,
   DailyChallengeProgress,
   DailyMetric,
   DeviceMode,
@@ -20,6 +22,7 @@ import type {
   PowerSlots,
   RenderEngineMode,
   SecretBossDef,
+  SkillRuneId,
   StarterBlessing,
   StatKey,
   SystemTheme,
@@ -29,20 +32,28 @@ import type {
 import { DEFAULT_HUD_CONFIG, DEFAULT_KEY_BINDINGS } from '../data/controlDefaults';
 import {
   ACHIEVEMENT_DEFS,
+  ARENA_MODIFIERS,
   CONSUMABLES,
+  CRAFTING_RECIPES,
   DEFAULT_AVATAR,
   DEFAULT_TITLES,
   GEAR_ITEMS,
   INITIAL_QUESTS,
   MAP_CHALLENGES,
   NPC_JOBS,
+  OVERWORLD_MAP,
   POWERS,
   SKILL_NETWORK_NODES,
+  SKILL_RUNES,
   SKILL_SLOT_UNLOCK_COSTS,
   STAT_DEFINITIONS,
   WEAPONS,
+  checkPowerRequirements,
+  computeFighterDerivedStats,
   getTodayDateKey,
   pickDailyChallengesForDate,
+  resolvePowerDef,
+  synthesizeCustomSkill,
   xpForNextLevel,
 } from '../data/gameCatalog';
 import { audioSynth } from '../engine/audioSynth';
@@ -125,6 +136,10 @@ function createInitialProfile(): PlayerProfile {
     avatar: {
       ...DEFAULT_AVATAR,
       powerSlots: [...DEFAULT_AVATAR.powerSlots] as PowerSlots,
+      secondaryPowerSlots: [
+        ...(DEFAULT_AVATAR.secondaryPowerSlots || ['thunder_strike', 'shadow_blink', 'inferno_nova', 'holy_sanctuary']),
+      ] as PowerSlots,
+      activeDeckIndex: 0,
       stats: { ...DEFAULT_AVATAR.stats },
     },
     gold: 540,
@@ -180,18 +195,29 @@ function createInitialProfile(): PlayerProfile {
       thunder_strike: 1,
       shadow_blink: 1,
     },
+    customSkills: [],
+    unlockedRunes: ['standard'],
+    equippedRunes: {},
     unlockedSkillSlots: 1,
     unlockedNetworkNodes: ['node_core_awakening'],
     unlockedGear: [],
+    gearLevels: {},
     equippedGear: {
       relic: null,
       armor_core: null,
       boots: null,
     },
+    loadouts: [null, null, null],
+    sharpeningStones: 0,
+    claimedCodexRegions: [],
     consumables: {
       elixir_heal: 2,
       scroll_energy: 1,
       tonic_fury: 1,
+      stun_bomb: 1,
+      healing_ward: 1,
+      loot_elixir: 0,
+      treasure_compass: 1,
     },
     monsterKillsByType: {},
     claimedChallenges: [],
@@ -257,6 +283,16 @@ function loadProfile(): PlayerProfile {
     const slot3: PowerId = rawSlots[3] || base.avatar.powerSlots[3];
     const powerSlots: PowerSlots = [slot0, slot1, slot2, slot3];
 
+    const fallbackDeck2: PowerSlots = base.avatar.secondaryPowerSlots || [slot2, slot3, slot0, slot1];
+    const rawDeck2 = Array.isArray(parsedAvatar?.secondaryPowerSlots) ? parsedAvatar.secondaryPowerSlots : [];
+    const secondaryPowerSlots: PowerSlots = [
+      rawDeck2[0] || fallbackDeck2[0],
+      rawDeck2[1] || fallbackDeck2[1],
+      rawDeck2[2] || fallbackDeck2[2],
+      rawDeck2[3] || fallbackDeck2[3],
+    ];
+    const activeDeckIndex: 0 | 1 = parsedAvatar?.activeDeckIndex === 1 ? 1 : 0;
+
     return {
       ...base,
       ...parsed,
@@ -270,6 +306,8 @@ function loadProfile(): PlayerProfile {
         powerId: slot0,
         secondaryPowerId: slot1,
         powerSlots,
+        secondaryPowerSlots,
+        activeDeckIndex,
         stats: migrateStats(parsedAvatar?.stats, base.avatar.stats),
       },
       weaponLevels: { ...base.weaponLevels, ...(parsed.weaponLevels || {}) },
@@ -278,6 +316,12 @@ function loadProfile(): PlayerProfile {
           ? (Array.from(new Set([...parsed.unlockedPowers, 'holy_sanctuary', 'shadow_blink'])) as PowerId[])
           : base.unlockedPowers,
       powerLevels: { ...base.powerLevels, ...(parsed.powerLevels || {}) },
+      customSkills: Array.isArray(parsed.customSkills) ? parsed.customSkills : [],
+      unlockedRunes:
+        Array.isArray(parsed.unlockedRunes) && parsed.unlockedRunes.length > 0
+          ? (Array.from(new Set(['standard', ...parsed.unlockedRunes])) as SkillRuneId[])
+          : ['standard'],
+      equippedRunes: { ...(parsed.equippedRunes || {}) },
       unlockedSkillSlots:
         typeof parsed.unlockedSkillSlots === 'number' &&
         parsed.unlockedSkillSlots >= 1 &&
@@ -289,7 +333,14 @@ function loadProfile(): PlayerProfile {
           ? Array.from(new Set(['node_core_awakening', ...parsed.unlockedNetworkNodes]))
           : ['node_core_awakening'],
       unlockedGear: Array.isArray(parsed.unlockedGear) ? parsed.unlockedGear : [],
+      gearLevels: { ...(parsed.gearLevels || {}) },
       equippedGear: { ...base.equippedGear, ...(parsed.equippedGear || {}) },
+      loadouts:
+        Array.isArray(parsed.loadouts) && parsed.loadouts.length === 3
+          ? parsed.loadouts
+          : [null, null, null],
+      sharpeningStones: typeof parsed.sharpeningStones === 'number' ? parsed.sharpeningStones : 0,
+      claimedCodexRegions: Array.isArray(parsed.claimedCodexRegions) ? parsed.claimedCodexRegions : [],
       consumables: { ...base.consumables, ...(parsed.consumables || {}) },
       gatheredResources: { ...base.gatheredResources, ...(parsed.gatheredResources || {}) },
       activeNpcJobs: { ...(parsed.activeNpcJobs || {}) },
@@ -510,40 +561,60 @@ export function usePlayerProgress() {
     return { ok: true, message: `تم شراء وتجهيز ${def.name}` };
   }, []);
 
-  const upgradeWeapon = useCallback((weaponId: WeaponId): { ok: boolean; message: string } => {
+  const upgradeWeapon = useCallback((weaponId: WeaponId, useStone = false): { ok: boolean; message: string } => {
     const curr = profileRef.current;
     const currentLv = curr.weaponLevels[weaponId] || 1;
     if (currentLv >= 5) {
       return { ok: false, message: 'وصل السلاح للحد الأقصى (المستوى 5).' };
     }
     const costGold = currentLv * 220;
-    if (curr.gold < costGold) {
+    if (useStone) {
+      if (curr.sharpeningStones <= 0) {
+        return { ok: false, message: 'لا تملك أحجار صقل النصل حالياً.' };
+      }
+    } else if (curr.gold < costGold) {
       return { ok: false, message: `تحتاج إلى ${costGold} ذهب للترقية.` };
     }
     audioSynth.playReward();
     const nextLv = currentLv + 1;
     setProfile((prev) => ({
       ...prev,
-      gold: prev.gold - costGold,
+      gold: useStone ? prev.gold : prev.gold - costGold,
+      sharpeningStones: useStone ? Math.max(0, prev.sharpeningStones - 1) : prev.sharpeningStones,
       weaponLevels: { ...prev.weaponLevels, [weaponId]: nextLv },
       quests: prev.quests.map((q) =>
         q.id === 'q_upgrade_weapon' ? { ...q, current: Math.max(q.current, 1) } : q
       ),
     }));
-    return { ok: true, message: `تمت ترقية السلاح إلى المستوى ${nextLv}` };
+    return {
+      ok: true,
+      message: useStone
+        ? `تمت ترقية السلاح إلى المستوى ${nextLv} بحجر الصقل!`
+        : `تمت ترقية السلاح إلى المستوى ${nextLv}`,
+    };
   }, []);
 
   const unlockOrEquipPower = useCallback(
-    (powerId: PowerId, slotIndex: 0 | 1 | 2 | 3 = 0): { ok: boolean; message: string } => {
-      const def = POWERS[powerId];
+    (powerId: PowerId, slotIndex: 0 | 1 | 2 | 3 = 0, deckIndex?: 0 | 1): { ok: boolean; message: string } => {
       const curr = profileRef.current;
+      const targetDeck: 0 | 1 = deckIndex ?? (curr.avatar.activeDeckIndex === 1 ? 1 : 0);
+      const def = resolvePowerDef(powerId, curr.customSkills);
       const slotKeys = ['[Q]', '[R]', '[Z]', '[X]'] as const;
-      const slotTag = `الخانة ${slotIndex + 1} ${slotKeys[slotIndex]}`;
+      const deckTag = `طقم ${targetDeck + 1}`;
+      const slotTag = `الخانة ${slotIndex + 1} ${slotKeys[slotIndex]} (${deckTag})`;
 
       if (slotIndex >= curr.unlockedSkillSlots) {
         return {
           ok: false,
           message: `${slotTag} مقفلة حالياً! اشترِ الخانة الإضافية أولاً لترفع عدد مهاراتك النشطة.`,
+        };
+      }
+
+      const req = checkPowerRequirements(def, curr.avatar.stats, curr.level);
+      if (!req.met) {
+        return {
+          ok: false,
+          message: `متطلبات السمات/المستوى غير مكتملة: ${req.missingLabels.join(' · ')}`,
         };
       }
 
@@ -553,19 +624,28 @@ export function usePlayerProgress() {
         return next;
       };
 
-      if (curr.unlockedPowers.includes(powerId)) {
-        setProfile((prev) => {
-          const nextSlots = buildNextSlots(prev.avatar.powerSlots);
+      const applyDeckUpdate = (prev: PlayerProfile) => {
+        const baseSecondary: PowerSlots = prev.avatar.secondaryPowerSlots || [...prev.avatar.powerSlots];
+        if (targetDeck === 1) {
           return {
-            ...prev,
-            avatar: {
-              ...prev.avatar,
-              powerSlots: nextSlots,
-              powerId: nextSlots[0],
-              secondaryPowerId: nextSlots[1],
-            },
+            ...prev.avatar,
+            secondaryPowerSlots: buildNextSlots(baseSecondary),
           };
-        });
+        }
+        const nextSlots = buildNextSlots(prev.avatar.powerSlots);
+        return {
+          ...prev.avatar,
+          powerSlots: nextSlots,
+          powerId: nextSlots[0],
+          secondaryPowerId: nextSlots[1],
+        };
+      };
+
+      if (curr.unlockedPowers.includes(powerId)) {
+        setProfile((prev) => ({
+          ...prev,
+          avatar: applyDeckUpdate(prev),
+        }));
         return { ok: true, message: `تم تعيين ${def.name} في ${slotTag}` };
       }
       if (def.isFusion) {
@@ -575,31 +655,78 @@ export function usePlayerProgress() {
         return { ok: false, message: 'رصيد الذهب أو الجواهر غير كافٍ.' };
       }
       audioSynth.playReward();
-      setProfile((prev) => {
-        const nextSlots = buildNextSlots(prev.avatar.powerSlots);
-        return {
-          ...prev,
-          gold: prev.gold - def.costGold,
-          gems: prev.gems - def.costGems,
-          unlockedPowers: prev.unlockedPowers.includes(powerId)
-            ? prev.unlockedPowers
-            : [...prev.unlockedPowers, powerId],
-          powerLevels: {
-            ...prev.powerLevels,
-            [powerId]: prev.powerLevels[powerId] || 1,
-          },
-          avatar: {
-            ...prev.avatar,
-            powerSlots: nextSlots,
-            powerId: nextSlots[0],
-            secondaryPowerId: nextSlots[1],
-          },
-        };
-      });
+      setProfile((prev) => ({
+        ...prev,
+        gold: prev.gold - def.costGold,
+        gems: prev.gems - def.costGems,
+        unlockedPowers: prev.unlockedPowers.includes(powerId)
+          ? prev.unlockedPowers
+          : [...prev.unlockedPowers, powerId],
+        powerLevels: {
+          ...prev.powerLevels,
+          [powerId]: prev.powerLevels[powerId] || 1,
+        },
+        avatar: applyDeckUpdate(prev),
+      }));
       return { ok: true, message: `تم فتح وتجهيز ${def.name} في ${slotTag}` };
     },
     []
   );
+
+  const swapCombatSkillSlot = useCallback((slotIndex: 0 | 1 | 2 | 3, powerId: PowerId, deckIndex?: 0 | 1): boolean => {
+    const curr = profileRef.current;
+    if (slotIndex >= curr.unlockedSkillSlots || !curr.unlockedPowers.includes(powerId)) return false;
+    const def = resolvePowerDef(powerId, curr.customSkills);
+    if (!checkPowerRequirements(def, curr.avatar.stats, curr.level).met) return false;
+    const targetDeck: 0 | 1 = deckIndex ?? (curr.avatar.activeDeckIndex === 1 ? 1 : 0);
+    setProfile((prev) => {
+      if (targetDeck === 1) {
+        const nextDeck2 = [...(prev.avatar.secondaryPowerSlots || prev.avatar.powerSlots)] as PowerSlots;
+        nextDeck2[slotIndex] = powerId;
+        return {
+          ...prev,
+          avatar: {
+            ...prev.avatar,
+            secondaryPowerSlots: nextDeck2,
+          },
+        };
+      }
+      const nextSlots = [...prev.avatar.powerSlots] as PowerSlots;
+      nextSlots[slotIndex] = powerId;
+      return {
+        ...prev,
+        avatar: {
+          ...prev.avatar,
+          powerSlots: nextSlots,
+          powerId: nextSlots[0],
+          secondaryPowerId: nextSlots[1],
+        },
+      };
+    });
+    return true;
+  }, []);
+
+  const setActiveSkillDeck = useCallback((deckIndex: 0 | 1) => {
+    setProfile((prev) => ({
+      ...prev,
+      avatar: {
+        ...prev.avatar,
+        activeDeckIndex: deckIndex,
+      },
+    }));
+  }, []);
+
+  const toggleActiveSkillDeck = useCallback((): 0 | 1 => {
+    const next: 0 | 1 = profileRef.current.avatar.activeDeckIndex === 1 ? 0 : 1;
+    setProfile((prev) => ({
+      ...prev,
+      avatar: {
+        ...prev.avatar,
+        activeDeckIndex: prev.avatar.activeDeckIndex === 1 ? 0 : 1,
+      },
+    }));
+    return next;
+  }, []);
 
   const unlockNextSkillSlot = useCallback(
     (payWith: 'gold_marks' | 'gems'): { ok: boolean; message: string } => {
@@ -647,8 +774,8 @@ export function usePlayerProgress() {
   );
 
   const upgradePower = useCallback((powerId: PowerId): { ok: boolean; message: string } => {
-    const def = POWERS[powerId];
     const curr = profileRef.current;
+    const def = resolvePowerDef(powerId, curr.customSkills);
     if (!curr.unlockedPowers.includes(powerId)) {
       return { ok: false, message: 'افتح المهارة أولاً قبل تطوير مستواها.' };
     }
@@ -677,6 +804,40 @@ export function usePlayerProgress() {
     }));
     return { ok: true, message: `تم تطوير ${def.name} إلى المستوى ${nextLv}!` };
   }, []);
+
+  const unlockOrEquipRune = useCallback(
+    (powerId: PowerId, runeId: SkillRuneId): { ok: boolean; message: string } => {
+      const curr = profileRef.current;
+      const rune = SKILL_RUNES[runeId];
+      if (!rune) return { ok: false, message: 'الرونة غير موجودة.' };
+      if (!curr.unlockedPowers.includes(powerId)) {
+        return { ok: false, message: 'افتح المهارة أولاً قبل تركيب الرونات عليها.' };
+      }
+      if (curr.unlockedRunes.includes(runeId)) {
+        setProfile((prev) => ({
+          ...prev,
+          equippedRunes: { ...prev.equippedRunes, [powerId]: runeId },
+        }));
+        return { ok: true, message: `تم تركيب «${rune.name}» على المهارة.` };
+      }
+      if (curr.gold < rune.costGold || curr.guildMarks < rune.costMarks) {
+        return {
+          ok: false,
+          message: `تحتاج إلى ${rune.costGold} ذهب و ${rune.costMarks} وسام نقابة لفتح ${rune.name}.`,
+        };
+      }
+      audioSynth.playReward();
+      setProfile((prev) => ({
+        ...prev,
+        gold: prev.gold - rune.costGold,
+        guildMarks: prev.guildMarks - rune.costMarks,
+        unlockedRunes: prev.unlockedRunes.includes(runeId) ? prev.unlockedRunes : [...prev.unlockedRunes, runeId],
+        equippedRunes: { ...prev.equippedRunes, [powerId]: runeId },
+      }));
+      return { ok: true, message: `تم فتح وتركيب «${rune.name}»!` };
+    },
+    []
+  );
 
   const unlockNetworkNode = useCallback((nodeId: string): { ok: boolean; message: string } => {
     const node = SKILL_NETWORK_NODES.find((n) => n.id === nodeId);
@@ -708,20 +869,55 @@ export function usePlayerProgress() {
     return { ok: true, message: `تم تفعيل عقدة «${node.title}» (${node.bonusLabel})!` };
   }, []);
 
-  const fusePowers = useCallback((fusionId: PowerId): { ok: boolean; message: string } => {
-    const def = POWERS[fusionId];
+  const respecNetworkNodes = useCallback((): { ok: boolean; message: string } => {
     const curr = profileRef.current;
+    const extras = curr.unlockedNetworkNodes.filter((id) => id !== 'node_core_awakening');
+    if (extras.length === 0) {
+      return { ok: false, message: 'لا توجد عقد إضافية لإعادة ضبطها.' };
+    }
+    let refundGold = 0;
+    let refundMarks = 0;
+    for (const id of extras) {
+      const node = SKILL_NETWORK_NODES.find((n) => n.id === id);
+      if (node) {
+        refundGold += node.costGold;
+        refundMarks += node.costMarks;
+      }
+    }
+    audioSynth.playReward();
+    setProfile((prev) => ({
+      ...prev,
+      gold: prev.gold + refundGold,
+      guildMarks: prev.guildMarks + refundMarks,
+      unlockedNetworkNodes: ['node_core_awakening'],
+    }));
+    return {
+      ok: true,
+      message: `تمت إعادة ضبط شبكة المهارات واسترداد +${refundGold} ذهب و +${refundMarks} وسام!`,
+    };
+  }, []);
+
+  const fusePowers = useCallback((fusionId: PowerId): { ok: boolean; message: string } => {
+    const curr = profileRef.current;
+    const def = resolvePowerDef(fusionId, curr.customSkills);
     if (!def || !def.isFusion || !def.fusionPair) {
       return { ok: false, message: 'وصفة دمج غير صالحة.' };
     }
     if (curr.unlockedPowers.includes(fusionId)) {
       return { ok: false, message: 'هذه المهارة المدمجة مفتوحة بالفعل! عيّنها في أي خانة نشطة.' };
     }
+    const req = checkPowerRequirements(def, curr.avatar.stats, curr.level);
+    if (!req.met) {
+      return {
+        ok: false,
+        message: `متطلبات السمات/المستوى غير مكتملة لهذه المهارة المدمجة: ${req.missingLabels.join(' · ')}`,
+      };
+    }
     const [pA, pB] = def.fusionPair;
     if (!curr.unlockedPowers.includes(pA) || !curr.unlockedPowers.includes(pB)) {
       return {
         ok: false,
-        message: `يجب امتلاك كل من «${POWERS[pA].name}» و«${POWERS[pB].name}» أولاً.`,
+        message: `يجب امتلاك كل من «${resolvePowerDef(pA, curr.customSkills).name}» و«${resolvePowerDef(pB, curr.customSkills).name}» أولاً.`,
       };
     }
     const lvA = curr.powerLevels[pA] || 1;
@@ -729,7 +925,7 @@ export function usePlayerProgress() {
     if (lvA < 2 || lvB < 2) {
       return {
         ok: false,
-        message: `يجب ترقية «${POWERS[pA].name}» و«${POWERS[pB].name}» إلى المستوى 2 على الأقل للدمج!`,
+        message: `يجب ترقية «${resolvePowerDef(pA, curr.customSkills).name}» و«${resolvePowerDef(pB, curr.customSkills).name}» إلى المستوى 2 على الأقل للدمج!`,
       };
     }
     const goldCost = def.fusionCostGold || 700;
@@ -764,6 +960,78 @@ export function usePlayerProgress() {
     return { ok: true, message: `اندماج ناجح! فُتحت مهارة «${def.name}» وجهّزت في [Q]!` };
   }, []);
 
+  const synthesizeDynamicSkill = useCallback(
+    (skillAId: PowerId, skillBId: PowerId, customName: string): { ok: boolean; message: string; createdSkill?: CustomSkillDef } => {
+      const curr = profileRef.current;
+      if (skillAId === skillBId) {
+        return { ok: false, message: 'اختر مهارتين مختلفتين لإجراء الدمج الشبكي.' };
+      }
+      if (!curr.unlockedPowers.includes(skillAId) || !curr.unlockedPowers.includes(skillBId)) {
+        return { ok: false, message: 'يجب فتح كلتا المهارتين قبل دمجهما.' };
+      }
+      const defA = resolvePowerDef(skillAId, curr.customSkills);
+      const defB = resolvePowerDef(skillBId, curr.customSkills);
+
+      // Check if a classic fusion recipe matches this exact pair
+      const classicMatch = Object.values(POWERS).find(
+        (p) =>
+          p.isFusion &&
+          p.fusionPair &&
+          ((p.fusionPair[0] === skillAId && p.fusionPair[1] === skillBId) ||
+            (p.fusionPair[1] === skillAId && p.fusionPair[0] === skillBId))
+      );
+      if (classicMatch && !curr.unlockedPowers.includes(classicMatch.id)) {
+        const res = fusePowers(classicMatch.id);
+        return res;
+      }
+
+      const goldCost = 520;
+      const marksCost = 12;
+      if (curr.gold < goldCost || curr.guildMarks < marksCost) {
+        return { ok: false, message: `تحتاج إلى ${goldCost} ذهب و ${marksCost} وسام نقابة لابتكار مهارة جديدة.` };
+      }
+      if (curr.customSkills.length >= 12) {
+        return { ok: false, message: 'وصلت للحد الأقصى للمهارات المبتكرة (12 مهارة).' };
+      }
+
+      const forged = synthesizeCustomSkill(defA, defB, customName);
+      audioSynth.playAchievementUnlock();
+      setProfile((prev) => {
+        const nextSlots = [...prev.avatar.powerSlots] as PowerSlots;
+        nextSlots[0] = forged.id;
+        return {
+          ...prev,
+          gold: prev.gold - goldCost,
+          guildMarks: prev.guildMarks - marksCost,
+          customSkills: [forged, ...prev.customSkills],
+          unlockedPowers: [...prev.unlockedPowers, forged.id],
+          powerLevels: { ...prev.powerLevels, [forged.id]: 1 },
+          avatar: {
+            ...prev.avatar,
+            powerSlots: nextSlots,
+            powerId: nextSlots[0],
+          },
+        };
+      });
+      return {
+        ok: true,
+        message: `تم ابتكار وتجهيز مهارة «${forged.name}» بنجاح في [Q]!`,
+        createdSkill: forged,
+      };
+    },
+    [fusePowers]
+  );
+
+  const renameCustomSkill = useCallback((skillId: string, newName: string): boolean => {
+    const clean = newName.trim().slice(0, 32);
+    if (!clean) return false;
+    setProfile((prev) => ({
+      ...prev,
+      customSkills: prev.customSkills.map((s) => (s.id === skillId ? { ...s, name: clean } : s)),
+    }));
+    return true;
+  }, []);
+
   const unlockOrEquipGear = useCallback((gearId: GearId): { ok: boolean; message: string } => {
     const def = GEAR_ITEMS[gearId];
     const curr = profileRef.current;
@@ -790,12 +1058,43 @@ export function usePlayerProgress() {
       gold: prev.gold - def.costGold,
       gems: prev.gems - def.costGems,
       unlockedGear: prev.unlockedGear.includes(gearId) ? prev.unlockedGear : [...prev.unlockedGear, gearId],
+      gearLevels: { ...prev.gearLevels, [gearId]: prev.gearLevels[gearId] || 1 },
       equippedGear: { ...prev.equippedGear, [def.slot]: gearId },
       quests: prev.quests.map((q) =>
         q.id === 'q_buy_gear' ? { ...q, current: Math.max(q.current, 1) } : q
       ),
     }));
     return { ok: true, message: `تم شراء وتجهيز ${def.name}!` };
+  }, []);
+
+  const upgradeGear = useCallback((gearId: GearId, useStone = false): { ok: boolean; message: string } => {
+    const curr = profileRef.current;
+    if (!curr.unlockedGear.includes(gearId)) {
+      return { ok: false, message: 'اشترِ القطعة أولاً قبل ترقيتها.' };
+    }
+    const currentLv = curr.gearLevels[gearId] || 1;
+    if (currentLv >= 5) {
+      return { ok: false, message: 'وصل السامان للحد الأقصى (المستوى 5).' };
+    }
+    const costGold = currentLv * 210;
+    const costMarks = currentLv * 4;
+    if (useStone) {
+      if (curr.sharpeningStones <= 0) {
+        return { ok: false, message: 'لا تملك أحجار صقل النصل حالياً.' };
+      }
+    } else if (curr.gold < costGold || curr.guildMarks < costMarks) {
+      return { ok: false, message: `تحتاج إلى ${costGold} ذهب و ${costMarks} وسام للترقية.` };
+    }
+    audioSynth.playReward();
+    const nextLv = currentLv + 1;
+    setProfile((prev) => ({
+      ...prev,
+      gold: useStone ? prev.gold : prev.gold - costGold,
+      guildMarks: useStone ? prev.guildMarks : prev.guildMarks - costMarks,
+      sharpeningStones: useStone ? Math.max(0, prev.sharpeningStones - 1) : prev.sharpeningStones,
+      gearLevels: { ...prev.gearLevels, [gearId]: nextLv },
+    }));
+    return { ok: true, message: `تم تطوير ${GEAR_ITEMS[gearId].name} إلى المستوى ${nextLv}!` };
   }, []);
 
   const unequipGearSlot = useCallback((slot: GearSlot) => {
@@ -858,12 +1157,128 @@ export function usePlayerProgress() {
     return { ok: true, message: `تم استلام عقد: ${job.title}` };
   }, []);
 
+  const craftRecipe = useCallback((recipeId: string): { ok: boolean; message: string } => {
+    const recipe = CRAFTING_RECIPES.find((r) => r.id === recipeId);
+    const curr = profileRef.current;
+    if (!recipe) return { ok: false, message: 'الوصفة غير موجودة.' };
+    if (curr.gold < recipe.costGold) {
+      return { ok: false, message: `تحتاج إلى ${recipe.costGold} ذهب لإتمام التصنيع.` };
+    }
+    for (const [k, req] of Object.entries(recipe.costResources)) {
+      const kind = k as OverworldNodeKind;
+      if ((curr.gatheredResources[kind] || 0) < (req || 0)) {
+        return { ok: false, message: 'موارد القارة المطلوبة غير كافية للتصنيع.' };
+      }
+    }
+    audioSynth.playReward();
+    setProfile((prev) => {
+      const nextRes = { ...prev.gatheredResources };
+      for (const [k, req] of Object.entries(recipe.costResources)) {
+        const kind = k as OverworldNodeKind;
+        nextRes[kind] = Math.max(0, (nextRes[kind] || 0) - (req || 0));
+      }
+      const nextConsumables = { ...prev.consumables };
+      let nextStones = prev.sharpeningStones;
+      if (recipe.resultKind === 'sharpening_stone') {
+        nextStones += recipe.resultQty;
+      } else if (recipe.resultConsumableId) {
+        nextConsumables[recipe.resultConsumableId] =
+          (nextConsumables[recipe.resultConsumableId] || 0) + recipe.resultQty;
+      }
+      return {
+        ...prev,
+        gold: prev.gold - recipe.costGold,
+        gatheredResources: nextRes,
+        consumables: nextConsumables,
+        sharpeningStones: nextStones,
+      };
+    });
+    return { ok: true, message: `تم تصنيع ${recipe.name} بنجاح!` };
+  }, []);
+
+  const saveLoadoutSlot = useCallback((slotIdx: 0 | 1 | 2, label?: string): { ok: boolean; message: string } => {
+    const curr = profileRef.current;
+    const slot: AvatarLoadoutSlot = {
+      name: (label || '').trim() || `تشكيلة ${slotIdx + 1} (${curr.avatar.name})`,
+      avatar: {
+        ...curr.avatar,
+        powerSlots: [...curr.avatar.powerSlots] as PowerSlots,
+        secondaryPowerSlots: [
+          ...(curr.avatar.secondaryPowerSlots || curr.avatar.powerSlots),
+        ] as PowerSlots,
+        activeDeckIndex: curr.avatar.activeDeckIndex === 1 ? 1 : 0,
+        stats: { ...curr.avatar.stats },
+      },
+      equippedGear: { ...curr.equippedGear },
+      equippedRunes: { ...curr.equippedRunes },
+      savedAt: Date.now(),
+    };
+    audioSynth.playReward();
+    setProfile((prev) => {
+      const nextLoadouts = [...prev.loadouts];
+      nextLoadouts[slotIdx] = slot;
+      return { ...prev, loadouts: nextLoadouts };
+    });
+    return { ok: true, message: `تم حفظ التشكيلة في الخانة ${slotIdx + 1}!` };
+  }, []);
+
+  const applyLoadoutSlot = useCallback((slotIdx: 0 | 1 | 2): { ok: boolean; message: string } => {
+    const curr = profileRef.current;
+    const slot = curr.loadouts[slotIdx];
+    if (!slot) return { ok: false, message: `الخانة ${slotIdx + 1} فارغة.` };
+    audioSynth.playReward();
+    setProfile((prev) => ({
+      ...prev,
+      avatar: {
+        ...slot.avatar,
+        powerSlots: [...slot.avatar.powerSlots] as PowerSlots,
+        secondaryPowerSlots: [
+          ...(slot.avatar.secondaryPowerSlots || prev.avatar.secondaryPowerSlots || slot.avatar.powerSlots),
+        ] as PowerSlots,
+        activeDeckIndex: slot.avatar.activeDeckIndex === 1 ? 1 : 0,
+        stats: { ...slot.avatar.stats },
+      },
+      equippedGear: { ...slot.equippedGear },
+      equippedRunes: { ...slot.equippedRunes },
+    }));
+    return { ok: true, message: `تم تطبيق «${slot.name}» بنجاح!` };
+  }, []);
+
+  const claimCodexRegion = useCallback((regionId: string): { ok: boolean; message: string } => {
+    const curr = profileRef.current;
+    const region = OVERWORLD_MAP.regions?.find((r) => r.id === regionId);
+    if (!region) return { ok: false, message: 'الإقليم غير موجود.' };
+    if (!curr.discoveredRegions.includes(regionId)) {
+      return { ok: false, message: 'اكتشف هذا الإقليم في القارة المفتوحة أولاً.' };
+    }
+    if (curr.claimedCodexRegions.includes(regionId)) {
+      return { ok: false, message: 'تم استلام مكافأة هذا الإقليم بالفعل.' };
+    }
+    audioSynth.playAchievementUnlock();
+    setProfile((prev) => ({
+      ...prev,
+      gold: prev.gold + 150,
+      guildMarks: prev.guildMarks + 12,
+      warriorChests: prev.warriorChests + 1,
+      claimedCodexRegions: [...prev.claimedCodexRegions, regionId],
+    }));
+    return { ok: true, message: `استلمت جائزة إقليم «${region.name}»: +150 ذهب، +12 وسام، وصندوق محارب!` };
+  }, []);
+
   const recordResourceGathered = useCallback((kind: OverworldNodeKind) => {
     audioSynth.playReward();
     setProfile((prev) => {
+      const derived = computeFighterDerivedStats(
+        prev.avatar,
+        prev.weaponLevels[prev.avatar.weaponId] || 1,
+        prev.equippedGear,
+        prev.gearLevels,
+        prev.unlockedNetworkNodes
+      );
+      const bonusQty = Math.random() < Math.max(0, derived.resourceYieldMult - 1) ? 2 : 1;
       const nextResources = {
         ...prev.gatheredResources,
-        [kind]: (prev.gatheredResources[kind] || 0) + 1,
+        [kind]: (prev.gatheredResources[kind] || 0) + bonusQty,
       };
       const nextJobs = { ...prev.activeNpcJobs };
       const matchingJobId =
@@ -873,10 +1288,10 @@ export function usePlayerProgress() {
       if (active && !active.completed && def) {
         nextJobs[matchingJobId] = {
           ...active,
-          progress: Math.min(def.target, active.progress + 1),
+          progress: Math.min(def.target, active.progress + bonusQty),
         };
       }
-      const dailySync = advanceDailyList(prev.dailyChallenges, prev.dailyChallengesDate, 'gather', 1);
+      const dailySync = advanceDailyList(prev.dailyChallenges, prev.dailyChallengesDate, 'gather', bonusQty);
       return {
         ...prev,
         ...dailySync,
@@ -1061,12 +1476,22 @@ export function usePlayerProgress() {
         dailySync = advanceDailyList(dailySync.dailyChallenges, dailySync.dailyChallengesDate, 'pvpWins', 1);
       }
 
+      const modMarksMult =
+        res.activeModifiers && res.activeModifiers.length > 0
+          ? 1 +
+            res.activeModifiers.reduce(
+              (acc, id) => acc + (ARENA_MODIFIERS.find((m) => m.id === id)?.rewardBonusPct || 0),
+              0
+            ) /
+              200
+          : 1;
+
       return {
         ...prev,
         ...dailySync,
         gold: prev.gold + res.goldEarned,
         gems: prev.gems + res.gemsEarned,
-        guildMarks: prev.guildMarks + Math.floor(res.kills * 1.5) + (res.bossKills > 0 ? 10 : 0),
+        guildMarks: prev.guildMarks + Math.floor((res.kills * 1.5 + (res.bossKills > 0 ? 10 : 0)) * modMarksMult),
         level: xpRes.level,
         xp: xpRes.xp,
         unspentStatPoints: xpRes.unspentStatPoints,
@@ -1484,14 +1909,26 @@ export function usePlayerProgress() {
     unlockOrEquipWeapon,
     upgradeWeapon,
     unlockOrEquipPower,
+    swapCombatSkillSlot,
+    setActiveSkillDeck,
+    toggleActiveSkillDeck,
     unlockNextSkillSlot,
     upgradePower,
+    unlockOrEquipRune,
     unlockNetworkNode,
+    respecNetworkNodes,
     fusePowers,
+    synthesizeDynamicSkill,
+    renameCustomSkill,
     unlockOrEquipGear,
+    upgradeGear,
     unequipGearSlot,
     buyConsumable,
     consumeBattleItem,
+    craftRecipe,
+    saveLoadoutSlot,
+    applyLoadoutSlot,
+    claimCodexRegion,
     acceptNpcJob,
     recordResourceGathered,
     completeNpcJob,

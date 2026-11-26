@@ -1,14 +1,16 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Check, Crown, Dices, Minus, Plus, Radar, RotateCcw, Wand2 } from 'lucide-react';
+import { Bookmark, Check, Crown, Dices, Minus, Plus, Radar, RotateCcw, Sparkles, Wand2 } from 'lucide-react';
 import type {
   ArmorStyle,
   AuraStyle,
   AvatarConfig,
   BackGearStyle,
   BodyBuild,
+  CustomSkillDef,
   HeadStyle,
   PlayerProfile,
   PowerId,
+  SkillRuneId,
   StatKey,
 } from '../types/game';
 import {
@@ -17,7 +19,10 @@ import {
   EXCLUSIVE_TITLES,
   GEAR_ITEMS,
   GLOW_SWATCHES,
+  MATERIAL_FINISH_OPTIONS,
   SKIN_TONES,
+  SLASH_COLOR_OPTIONS,
+  STAT_BREAKPOINTS_INFO,
   STAT_DEFINITIONS,
   computeFighterDerivedStats,
 } from '../data/gameCatalog';
@@ -32,12 +37,24 @@ interface AvatarForgeProps {
   onAllocateStat: (stat: StatKey, delta: 1 | -1) => void;
   onUnlockOrEquipPower: (
     powerId: PowerId,
-    slotIndex?: 0 | 1 | 2 | 3
+    slotIndex?: 0 | 1 | 2 | 3,
+    deckIndex?: 0 | 1
   ) => { ok: boolean; message: string };
+  onSetActiveSkillDeck?: (deckIndex: 0 | 1) => void;
   onUnlockNextSkillSlot: (payWith: 'gold_marks' | 'gems') => { ok: boolean; message: string };
   onUpgradePower: (powerId: PowerId) => { ok: boolean; message: string };
   onUnlockNetworkNode: (nodeId: string) => { ok: boolean; message: string };
+  onRespecNetworkNodes?: () => { ok: boolean; message: string };
+  onUnlockOrEquipRune?: (powerId: PowerId, runeId: SkillRuneId) => { ok: boolean; message: string };
   onFusePowers: (fusionId: PowerId) => { ok: boolean; message: string };
+  onSynthesizeDynamicSkill?: (
+    skillAId: PowerId,
+    skillBId: PowerId,
+    customName: string
+  ) => { ok: boolean; message: string; createdSkill?: CustomSkillDef };
+  onRenameCustomSkill?: (skillId: string, newName: string) => boolean;
+  onSaveLoadoutSlot?: (slotIdx: 0 | 1 | 2, label?: string) => { ok: boolean; message: string };
+  onApplyLoadoutSlot?: (slotIdx: 0 | 1 | 2) => { ok: boolean; message: string };
   onStartCombat: () => void;
 }
 
@@ -189,10 +206,17 @@ export const AvatarForge: React.FC<AvatarForgeProps> = ({
   onEquipTitle,
   onAllocateStat,
   onUnlockOrEquipPower,
+  onSetActiveSkillDeck,
   onUnlockNextSkillSlot,
   onUpgradePower,
   onUnlockNetworkNode,
+  onRespecNetworkNodes,
+  onUnlockOrEquipRune,
   onFusePowers,
+  onSynthesizeDynamicSkill,
+  onRenameCustomSkill,
+  onSaveLoadoutSlot,
+  onApplyLoadoutSlot,
   onStartCombat,
 }) => {
   const [draft, setDraft] = useState<AvatarConfig>(() => ({
@@ -220,11 +244,19 @@ export const AvatarForge: React.FC<AvatarForgeProps> = ({
     powerId: profile.avatar.powerId,
     secondaryPowerId: profile.avatar.secondaryPowerId,
     powerSlots: profile.avatar.powerSlots,
+    secondaryPowerSlots: profile.avatar.secondaryPowerSlots,
+    activeDeckIndex: profile.avatar.activeDeckIndex,
     stats: profile.avatar.stats,
   };
 
   const weaponLv = profile.weaponLevels[syncedDraft.weaponId] || 1;
-  const derived = computeFighterDerivedStats(syncedDraft, weaponLv, profile.equippedGear);
+  const derived = computeFighterDerivedStats(
+    syncedDraft,
+    weaponLv,
+    profile.equippedGear,
+    profile.gearLevels,
+    profile.unlockedNetworkNodes
+  );
 
   const equippedSamanList = (['relic', 'armor_core', 'boots'] as const)
     .map((slot) => (profile.equippedGear[slot] ? GEAR_ITEMS[profile.equippedGear[slot]!] : null))
@@ -467,6 +499,63 @@ export const AvatarForge: React.FC<AvatarForgeProps> = ({
           <div className="p-5 sm:p-6 space-y-6 flex-1">
             {tab === 'body' && (
               <>
+                {/* 3 Quick Saved Loadouts Bar */}
+                {onSaveLoadoutSlot && onApplyLoadoutSlot && (
+                  <div className="p-3.5 rounded-xl bg-[#0B1220] border border-[#38BDF8]/30 space-y-2.5">
+                    <div className="flex items-center justify-between text-xs">
+                      <span className="font-bold text-[#38BDF8] flex items-center gap-1.5">
+                        <Bookmark className="w-3.5 h-3.5" />
+                        <span>خانات حفظ التشكيلات السريعة (3 خانات)</span>
+                      </span>
+                      <span className="text-[11px] text-[#94A3B8]">تحفظ الأفتار + السامان + الرونات</span>
+                    </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                      {([0, 1, 2] as const).map((idx) => {
+                        const slot = profile.loadouts?.[idx];
+                        return (
+                          <div key={`ld_${idx}`} className="p-2.5 rounded-lg bg-[#121C30] border border-white/10 space-y-2">
+                            <div className="text-xs font-bold text-[#F1F5F9] truncate">
+                              {slot ? slot.name : `خانة فارغة ${idx + 1}`}
+                            </div>
+                            <div className="flex items-center gap-1.5">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  const cleanName = syncedDraft.name.trim() || 'بطل الميدان';
+                                  onSaveAvatar({ ...syncedDraft, name: cleanName.slice(0, 22) });
+                                  const res = onSaveLoadoutSlot(idx);
+                                  showToast(res.message);
+                                }}
+                                className="flex-1 py-1 px-2 text-[11px] font-bold rounded bg-[#1D2D4D] hover:bg-[#273E6B] text-[#E6B85C] cursor-pointer"
+                              >
+                                حفظ هنا
+                              </button>
+                              <button
+                                type="button"
+                                disabled={!slot}
+                                onClick={() => {
+                                  const res = onApplyLoadoutSlot(idx);
+                                  if (res.ok && slot) {
+                                    setDraft({
+                                      ...slot.avatar,
+                                      powerSlots: [...slot.avatar.powerSlots],
+                                      stats: { ...slot.avatar.stats },
+                                    });
+                                  }
+                                  showToast(res.message);
+                                }}
+                                className="flex-1 py-1 px-2 text-[11px] font-bold rounded bg-[#102622] hover:bg-[#163832] disabled:opacity-40 text-[#34D399] cursor-pointer"
+                              >
+                                تطبيق
+                              </button>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+
                 <div className="space-y-2.5">
                   <span className="text-xs font-medium text-[#E6B85C] flex items-center gap-1.5">
                     <Wand2 className="w-3.5 h-3.5" />
@@ -821,6 +910,60 @@ export const AvatarForge: React.FC<AvatarForgeProps> = ({
                     ))}
                   </div>
                 </div>
+
+                {/* Material Finish & Weapon Slash Trail Color */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-2 border-t border-white/10">
+                  <div className="space-y-2">
+                    <span className="text-xs font-medium text-[#E6B85C]">خامة ولمعان الدرع (WebGL 3D)</span>
+                    <div className="space-y-1.5">
+                      {MATERIAL_FINISH_OPTIONS.map((mf) => {
+                        const active = (draft.materialFinish || 'metallic') === mf.id;
+                        return (
+                          <button
+                            key={mf.id}
+                            type="button"
+                            onClick={() => setDraft({ ...draft, materialFinish: mf.id })}
+                            className={`w-full p-2.5 rounded-lg border text-right transition-colors cursor-pointer ${
+                              active
+                                ? 'bg-[#18253C] border-[#E6B85C] text-[#F1F5F9]'
+                                : 'bg-[#0B1220] border-white/10 text-[#CBD5E1]'
+                            }`}
+                          >
+                            <div className="text-xs font-bold">{mf.label}</div>
+                            <div className="text-[10px] text-[#94A3B8]">{mf.desc}</div>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  <div className="space-y-2">
+                    <span className="text-xs font-medium text-[#38BDF8]">لون أثر ضربة السلاح</span>
+                    <div className="flex flex-wrap gap-2">
+                      {SLASH_COLOR_OPTIONS.map((sc) => {
+                        const active = (draft.slashColor || '') === sc.color;
+                        return (
+                          <button
+                            key={sc.label}
+                            type="button"
+                            onClick={() => setDraft({ ...draft, slashColor: sc.color || undefined })}
+                            className={`flex items-center gap-2 px-2.5 py-1.5 rounded-lg border text-xs cursor-pointer ${
+                              active
+                                ? 'border-[#38BDF8] bg-[#162742] text-[#F8FAFC]'
+                                : 'border-white/10 bg-[#0B1220] text-[#CBD5E1]'
+                            }`}
+                          >
+                            <span
+                              className="w-3.5 h-3.5 rounded-sm border border-white/25 shrink-0"
+                              style={{ backgroundColor: sc.color || '#E6B85C' }}
+                            />
+                            <span>{sc.label}</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                </div>
               </>
             )}
 
@@ -846,29 +989,41 @@ export const AvatarForge: React.FC<AvatarForgeProps> = ({
                       تأثير السمات على أدائك الفعلي
                     </div>
                     <div className="grid grid-cols-2 gap-2">
-                      <div className="p-2.5 rounded-lg bg-[#121C30] border border-white/5">
-                        <div className="text-[#94A3B8]">قوة القدرات</div>
-                        <div className="font-mono-num font-bold text-[#A855F7] mt-0.5">{derived.powerScale}x</div>
+                      <div className="p-2 rounded-lg bg-[#121C30] border border-white/5">
+                        <div className="text-[#94A3B8]">الستامينا / التعافي</div>
+                        <div className="font-mono-num font-bold text-[#F59E0B] mt-0.5">
+                          {derived.maxStamina} ({derived.staminaRegen}/ث)
+                        </div>
                       </div>
-                      <div className="p-2.5 rounded-lg bg-[#121C30] border border-white/5">
-                        <div className="text-[#94A3B8]">سرعة الضرب</div>
-                        <div className="font-mono-num font-bold text-[#E6B85C] mt-0.5">{derived.attackSpeedMult}x</div>
+                      <div className="p-2 rounded-lg bg-[#121C30] border border-white/5">
+                        <div className="text-[#94A3B8]">المانا / التعافي</div>
+                        <div className="font-mono-num font-bold text-[#38BDF8] mt-0.5">
+                          {derived.maxMana} ({derived.manaRegen}/ث)
+                        </div>
                       </div>
-                      <div className="p-2.5 rounded-lg bg-[#121C30] border border-white/5">
-                        <div className="text-[#94A3B8]">تقليص التبريد</div>
-                        <div className="font-mono-num font-bold text-[#38BDF8] mt-0.5">{Math.round(derived.cooldownReduction * 100)}%</div>
+                      <div className="p-2 rounded-lg bg-[#121C30] border border-white/5">
+                        <div className="text-[#94A3B8]">قوة القدرات / مداها</div>
+                        <div className="font-mono-num font-bold text-[#A855F7] mt-0.5">
+                          {derived.powerScale}x · {derived.powerRadiusMult}x
+                        </div>
                       </div>
-                      <div className="p-2.5 rounded-lg bg-[#121C30] border border-white/5">
-                        <div className="text-[#94A3B8]">شحن الطاقة</div>
-                        <div className="font-mono-num font-bold text-[#2DD4BF] mt-0.5">{derived.energyRegen}/ث</div>
+                      <div className="p-2 rounded-lg bg-[#121C30] border border-white/5">
+                        <div className="text-[#94A3B8]">الصدّ المثالي / القفز</div>
+                        <div className="font-mono-num font-bold text-[#60A5FA] mt-0.5">
+                          {derived.parryWindowSec}ث · {derived.jumpHeightMult}x
+                        </div>
                       </div>
-                      <div className="p-2.5 rounded-lg bg-[#121C30] border border-white/5">
-                        <div className="text-[#94A3B8]">الضربة الحاسمة</div>
-                        <div className="font-mono-num font-bold text-[#FDE047] mt-0.5">{derived.critChance}%</div>
+                      <div className="p-2 rounded-lg bg-[#121C30] border border-white/5">
+                        <div className="text-[#94A3B8]">الحاسمة / الضرر</div>
+                        <div className="font-mono-num font-bold text-[#FDE047] mt-0.5">
+                          {derived.critChance}% ({derived.critMult}x)
+                        </div>
                       </div>
-                      <div className="p-2.5 rounded-lg bg-[#121C30] border border-white/5">
-                        <div className="text-[#94A3B8]">مضاعف الغنائم</div>
-                        <div className="font-mono-num font-bold text-[#10B981] mt-0.5">{derived.lootMultiplier}x</div>
+                      <div className="p-2 rounded-lg bg-[#121C30] border border-white/5">
+                        <div className="text-[#94A3B8]">الغنائم / شفاء خارج القتال</div>
+                        <div className="font-mono-num font-bold text-[#10B981] mt-0.5">
+                          {derived.lootMultiplier}x · +{derived.outOfCombatHpRegen}/ث
+                        </div>
                       </div>
                     </div>
                   </div>
@@ -914,6 +1069,23 @@ export const AvatarForge: React.FC<AvatarForgeProps> = ({
                     );
                   })}
                 </div>
+
+                {/* Tangible Breakpoint Reference Panel */}
+                <div className="p-3.5 rounded-xl bg-[#090F1C] border border-[#38BDF8]/25 space-y-2.5">
+                  <div className="text-xs font-bold text-[#38BDF8] flex items-center gap-1.5">
+                    <Sparkles className="w-3.5 h-3.5" />
+                    <span>التأثير الفعلي الملموس لكل سمة داخل القتال</span>
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-[11px]">
+                    {STAT_BREAKPOINTS_INFO.map((bp) => (
+                      <div key={bp.key} className="p-2 rounded-lg bg-[#0F172A] border border-white/5 space-y-0.5">
+                        <div className="font-bold text-[#F1F5F9]">{bp.label}</div>
+                        <div className="text-[#38BDF8] font-mono-num">{bp.formulaDesc}</div>
+                        <div className="text-[#94A3B8]">{bp.exampleBonus}</div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
               </div>
             )}
 
@@ -923,10 +1095,15 @@ export const AvatarForge: React.FC<AvatarForgeProps> = ({
                 powerSlotTarget={powerSlotTarget}
                 onSelectSlotTarget={setPowerSlotTarget}
                 onUnlockOrEquipPower={onUnlockOrEquipPower}
+                onSetActiveSkillDeck={onSetActiveSkillDeck}
                 onUnlockNextSkillSlot={onUnlockNextSkillSlot}
                 onUpgradePower={onUpgradePower}
                 onUnlockNetworkNode={onUnlockNetworkNode}
+                onRespecNetworkNodes={onRespecNetworkNodes}
+                onUnlockOrEquipRune={onUnlockOrEquipRune}
                 onFusePowers={onFusePowers}
+                onSynthesizeDynamicSkill={onSynthesizeDynamicSkill}
+                onRenameCustomSkill={onRenameCustomSkill}
                 onNotify={showToast}
                 onTriggerPreviewPower={() => setPreviewAct('power')}
               />

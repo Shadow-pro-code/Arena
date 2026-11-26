@@ -94,7 +94,7 @@ export function computeAdaptiveUiMetrics(input: AdaptiveUiInput): AdaptiveUiMetr
           ? 'portrait'
           : 'tablet';
 
-  const showTouchControls = input.deviceMode === 'mobile' || (input.hasCoarsePointer && effectiveWidth < 1180);
+  const showTouchControls = input.deviceMode === 'mobile';
   const showDesktopShortcutLine = !showTouchControls && (tier === 'laptop' || tier === 'desktop_wide');
 
   // Preserve crisp 1:1 native pixel rendering by default; apply only user-configured HUD scale

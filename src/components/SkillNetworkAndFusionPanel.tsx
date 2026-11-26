@@ -3,33 +3,56 @@ import {
   ArrowUpCircle,
   Award,
   Coins,
+  Edit3,
   Flame,
   Gem,
   GitMerge,
   Lock,
   Network,
+  RotateCcw,
   Sparkles,
   Unlock,
+  Wand2,
 } from 'lucide-react';
-import type { PlayerProfile, PowerId } from '../types/game';
+import type { CustomSkillDef, PlayerProfile, PowerId, SkillRuneId } from '../types/game';
 import {
   CORE_POWER_LIST,
+  ELEMENT_META,
   FUSION_POWER_LIST,
-  POWERS,
+  RANK_META,
   SKILL_NETWORK_NODES,
+  SKILL_RUNES,
+  SKILL_RUNE_LIST,
   SKILL_SLOT_UNLOCK_COSTS,
+  SYNTHESIS_GEOMETRY_META,
+  checkPowerRequirements,
   computeSkillNetworkBonuses,
+  getPowerRank,
+  resolvePowerDef,
 } from '../data/gameCatalog';
 
 interface SkillNetworkAndFusionPanelProps {
   profile: PlayerProfile;
   powerSlotTarget: 0 | 1 | 2 | 3;
   onSelectSlotTarget: (slot: 0 | 1 | 2 | 3) => void;
-  onUnlockOrEquipPower: (powerId: PowerId, slotIndex: 0 | 1 | 2 | 3) => { ok: boolean; message: string };
+  onUnlockOrEquipPower: (
+    powerId: PowerId,
+    slotIndex: 0 | 1 | 2 | 3,
+    deckIndex?: 0 | 1
+  ) => { ok: boolean; message: string };
+  onSetActiveSkillDeck?: (deckIndex: 0 | 1) => void;
   onUnlockNextSkillSlot: (payWith: 'gold_marks' | 'gems') => { ok: boolean; message: string };
   onUpgradePower: (powerId: PowerId) => { ok: boolean; message: string };
   onUnlockNetworkNode: (nodeId: string) => { ok: boolean; message: string };
+  onRespecNetworkNodes?: () => { ok: boolean; message: string };
+  onUnlockOrEquipRune?: (powerId: PowerId, runeId: SkillRuneId) => { ok: boolean; message: string };
   onFusePowers: (fusionId: PowerId) => { ok: boolean; message: string };
+  onSynthesizeDynamicSkill?: (
+    skillAId: PowerId,
+    skillBId: PowerId,
+    customName: string
+  ) => { ok: boolean; message: string; createdSkill?: CustomSkillDef };
+  onRenameCustomSkill?: (skillId: string, newName: string) => boolean;
   onNotify: (msg: string) => void;
   onTriggerPreviewPower: () => void;
 }
@@ -56,25 +79,57 @@ export const SkillNetworkAndFusionPanel: React.FC<SkillNetworkAndFusionPanelProp
   powerSlotTarget,
   onSelectSlotTarget,
   onUnlockOrEquipPower,
+  onSetActiveSkillDeck,
   onUnlockNextSkillSlot,
   onUpgradePower,
   onUnlockNetworkNode,
+  onRespecNetworkNodes,
+  onUnlockOrEquipRune,
   onFusePowers,
+  onSynthesizeDynamicSkill,
+  onRenameCustomSkill,
   onNotify,
   onTriggerPreviewPower,
 }) => {
   const [subTab, setSubTab] = useState<SkillsSubTab>('slots');
+  const [editingDeck, setEditingDeck] = useState<0 | 1>(profile.avatar.activeDeckIndex === 1 ? 1 : 0);
   const [selectedNodeId, setSelectedNodeId] = useState<string>('node_core_awakening');
+  const [synthA, setSynthA] = useState<PowerId>(profile.unlockedPowers[0] || 'inferno_nova');
+  const [synthB, setSynthB] = useState<PowerId>(profile.unlockedPowers[1] || 'thunder_strike');
+  const [synthName, setSynthName] = useState<string>('');
+  const [editingCustomId, setEditingCustomId] = useState<string | null>(null);
+  const [editingCustomName, setEditingCustomName] = useState<string>('');
+
+  const activeDeckSlots =
+    editingDeck === 1
+      ? (profile.avatar.secondaryPowerSlots || profile.avatar.powerSlots)
+      : profile.avatar.powerSlots;
 
   const netBonuses = computeSkillNetworkBonuses(profile.unlockedNetworkNodes);
   const nextLockedSlot = profile.unlockedSkillSlots < 4 ? ((profile.unlockedSkillSlots + 1) as 2 | 3 | 4) : null;
   const nextSlotCost = nextLockedSlot ? SKILL_SLOT_UNLOCK_COSTS[nextLockedSlot] : null;
   const selectedNode = SKILL_NETWORK_NODES.find((n) => n.id === selectedNodeId) || SKILL_NETWORK_NODES[0];
 
+  const customSkills = profile.customSkills || [];
   const allEquippablePowers = [
+    ...customSkills,
     ...CORE_POWER_LIST,
     ...FUSION_POWER_LIST.filter((fp) => profile.unlockedPowers.includes(fp.id)),
   ];
+  const unlockedSkillDefs = profile.unlockedPowers.map((id) => resolvePowerDef(id, customSkills));
+  const synthDefA = resolvePowerDef(synthA, customSkills);
+  const synthDefB = resolvePowerDef(synthB, customSkills);
+  const previewMotion = synthDefA.motionKind || 'aoe_burst';
+  const previewElement = synthDefB.element || 'fire';
+  const previewClassicMatch = FUSION_POWER_LIST.find(
+    (fp) =>
+      fp.fusionPair &&
+      ((fp.fusionPair[0] === synthA && fp.fusionPair[1] === synthB) ||
+        (fp.fusionPair[1] === synthA && fp.fusionPair[0] === synthB))
+  );
+  const previewClassicReq = previewClassicMatch
+    ? checkPowerRequirements(previewClassicMatch, profile.avatar.stats, profile.level)
+    : null;
 
   return (
     <div className="space-y-5">
@@ -138,11 +193,45 @@ export const SkillNetworkAndFusionPanel: React.FC<SkillNetworkAndFusionPanelProp
       {/* SUB-TAB 1: ACTIVE SLOTS + PROGRESSIVE UNLOCKER + POWER UPGRADING */}
       {subTab === 'slots' && (
         <div className="space-y-4">
+          {/* Dual Skill Deck Selector (Deck 1 vs Deck 2) */}
+          <div className="p-2.5 rounded-xl bg-[#090F1D] border border-[#38BDF8]/30 flex flex-wrap items-center justify-between gap-2">
+            <div className="text-xs text-[#CBD5E1]">
+              <strong className="text-[#F8FAFC]">نظام الطقمين المزدوج (8 مهارات):</strong>{' '}
+              <span className="text-[#94A3B8]">بدّل بين الطقم 1 والطقم 2 فورياً داخل القتال بزر [N]!</span>
+            </div>
+            <div className="flex items-center gap-1.5">
+              {([0, 1] as const).map((dIdx) => {
+                const isSelected = editingDeck === dIdx;
+                const isDefaultActive = (profile.avatar.activeDeckIndex ?? 0) === dIdx;
+                return (
+                  <button
+                    key={`deck_${dIdx}`}
+                    type="button"
+                    onClick={() => {
+                      setEditingDeck(dIdx);
+                      onSetActiveSkillDeck?.(dIdx);
+                      onNotify(`يتم الآن تعديل وتنشيط طقم المهارات ${dIdx + 1}`);
+                    }}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-bold border cursor-pointer transition-colors ${
+                      isSelected
+                        ? dIdx === 1
+                          ? 'bg-[#102944] text-[#38BDF8] border-[#38BDF8]'
+                          : 'bg-[#292011] text-[#E6B85C] border-[#E6B85C]'
+                        : 'bg-[#0E1629] text-[#94A3B8] border-white/10 hover:text-[#F8FAFC]'
+                    }`}
+                  >
+                    طقم {dIdx + 1} {isDefaultActive ? '• نشط' : ''}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
           {/* 4-Slot Selector with Lock Indicators */}
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
             {SKILL_SLOT_META.map((slot) => {
               const isUnlocked = slot.index < profile.unlockedSkillSlots;
-              const equippedPower = POWERS[profile.avatar.powerSlots[slot.index]];
+              const equippedPower = resolvePowerDef(activeDeckSlots[slot.index], customSkills);
               const equippedLv = equippedPower ? profile.powerLevels[equippedPower.id] || 1 : 1;
               const isSelected = powerSlotTarget === slot.index;
 
@@ -243,39 +332,161 @@ export const SkillNetworkAndFusionPanel: React.FC<SkillNetworkAndFusionPanelProp
               const upgMarks = lv * (pw.isFusion ? 8 : 5);
 
               const activeSlotIndices = SKILL_SLOT_META.filter(
-                (s) => s.index < profile.unlockedSkillSlots && profile.avatar.powerSlots[s.index] === pw.id
+                (s) => s.index < profile.unlockedSkillSlots && activeDeckSlots[s.index] === pw.id
               ).map((s) => `[${s.keyLabel}]`);
 
               const effectiveTarget: 0 | 1 | 2 | 3 =
                 powerSlotTarget < profile.unlockedSkillSlots ? powerSlotTarget : 0;
-              const isActiveInTarget = profile.avatar.powerSlots[effectiveTarget] === pw.id;
+              const isActiveInTarget = activeDeckSlots[effectiveTarget] === pw.id;
               const targetKey = SKILL_SLOT_META[effectiveTarget].keyLabel;
+              const rank = getPowerRank(pw.id, lv, customSkills);
+              const rankMeta = RANK_META[rank];
+              const elMeta = ELEMENT_META[pw.element || 'fire'];
+              const equippedRuneId: SkillRuneId = profile.equippedRunes?.[pw.id] || 'standard';
+              const req = checkPowerRequirements(pw, profile.avatar.stats, profile.level);
 
               return (
                 <div
                   key={pw.id}
                   className={`p-3.5 rounded-xl border flex flex-col justify-between gap-3 ${
-                    pw.isFusion
-                      ? 'bg-[#1F1233]/90 border-[#C084FC]/55'
-                      : activeSlotIndices.length > 0
-                        ? 'bg-[#14223D] border-[var(--sys-accent)]/60'
-                        : 'system-card'
+                    pw.isCustom
+                      ? 'bg-[#122038]/90 border-[#38BDF8]/55'
+                      : pw.isFusion
+                        ? 'bg-[#1F1233]/90 border-[#C084FC]/55'
+                        : activeSlotIndices.length > 0
+                          ? 'bg-[#14223D] border-[var(--sys-accent)]/60'
+                          : 'system-card'
                   }`}
                 >
-                  <div className="space-y-1">
+                  <div className="space-y-1.5">
                     <div className="flex items-center justify-between gap-2">
-                      <span className="font-display text-sm font-bold text-[#F8FAFC] flex items-center gap-1.5">
-                        {pw.isFusion && <Flame className="w-3.5 h-3.5 text-[#C084FC]" />}
-                        <span>{pw.name}</span>
+                      <span className="font-display text-sm font-bold text-[#F8FAFC] flex items-center gap-1.5 min-w-0">
+                        {pw.isCustom ? (
+                          <Wand2 className="w-3.5 h-3.5 text-[#38BDF8] shrink-0" />
+                        ) : pw.isFusion ? (
+                          <Flame className="w-3.5 h-3.5 text-[#C084FC] shrink-0" />
+                        ) : null}
+                        <span className="truncate">{pw.name}</span>
+                        {pw.isCustom && onRenameCustomSkill && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setEditingCustomId(pw.id);
+                              setEditingCustomName(pw.name);
+                            }}
+                            title="تغيير اسم المهارة"
+                            className="text-[#94A3B8] hover:text-[#38BDF8] cursor-pointer shrink-0"
+                          >
+                            <Edit3 className="w-3 h-3" />
+                          </button>
+                        )}
                       </span>
-                      <span className="text-[11px] font-mono-num text-[#38BDF8]">
-                        {unlocked ? `Lv.${lv}/5` : 'مقفلة'}
-                      </span>
+                      <div className="flex items-center gap-1.5 shrink-0">
+                        <span
+                          className="text-[10px] font-mono-num font-extrabold px-1.5 py-0.5 rounded border"
+                          style={{ color: rankMeta.color, backgroundColor: rankMeta.bg, borderColor: rankMeta.border }}
+                        >
+                          {rank}
+                        </span>
+                        <span className="text-[11px] font-mono-num text-[#38BDF8]">
+                          {unlocked ? `Lv.${lv}/5` : 'مقفلة'}
+                        </span>
+                      </div>
                     </div>
-                    <div className="text-[11px] font-mono-num text-[#94A3B8]">
-                      ضرر {scaledDamage} · تبريد {pw.cooldown}ث · مدى {pw.radius}م
+
+                    {editingCustomId === pw.id && onRenameCustomSkill && (
+                      <div className="flex items-center gap-1.5 pt-1">
+                        <input
+                          type="text"
+                          maxLength={32}
+                          value={editingCustomName}
+                          onChange={(e) => setEditingCustomName(e.target.value)}
+                          className="flex-1 px-2 py-1 text-xs bg-[#0A0F1A] border border-[#38BDF8]/40 rounded text-[#F1F5F9]"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (onRenameCustomSkill(pw.id, editingCustomName)) {
+                              onNotify('تم تحديث اسم المهارة المبتكرة!');
+                            }
+                            setEditingCustomId(null);
+                          }}
+                          className="px-2 py-1 text-[11px] font-bold bg-[#38BDF8] text-[#0A0F1A] rounded cursor-pointer"
+                        >
+                          حفظ
+                        </button>
+                      </div>
+                    )}
+
+                    <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] font-mono-num text-[#94A3B8]">
+                      <span style={{ color: elMeta.color }}>{elMeta.label}</span>
+                      <span>·</span>
+                      <span>ضرر {scaledDamage}</span>
+                      <span>·</span>
+                      <span className="text-[#38BDF8]">{pw.energyCost} مانا</span>
+                      <span>·</span>
+                      <span>مدى {pw.radius}م</span>
+                      {pw.maxUsesPerWave && (
+                        <>
+                          <span>·</span>
+                          <span className="text-[#F59E0B] font-bold">حد: {pw.maxUsesPerWave}/موجة</span>
+                        </>
+                      )}
                     </div>
                     <p className="text-xs text-[#CBD5E1] leading-snug">{pw.description}</p>
+                    {(req.allLabels.length > 0 || !req.met) && (
+                      <div
+                        className={`px-2 py-1 rounded-lg text-[10px] font-bold border flex flex-wrap items-center gap-1.5 ${
+                          req.met
+                            ? 'bg-[#0C1D1A] border-[#10B981]/30 text-[#6EE7B7]'
+                            : 'bg-[#231216] border-[#EF4444]/40 text-[#FCA5A5]'
+                        }`}
+                      >
+                        {req.met ? <Unlock className="w-3 h-3 shrink-0" /> : <Lock className="w-3 h-3 shrink-0" />}
+                        <span>
+                          {req.met
+                            ? `متطلبات مكتملة: ${req.allLabels.join(' · ')}`
+                            : `مقفلة — ينقصك: ${req.missingLabels.join(' · ')}`}
+                        </span>
+                      </div>
+                    )}
+
+                    {/* Skill Runes Row */}
+                    {unlocked && onUnlockOrEquipRune && (
+                      <div className="pt-1.5 space-y-1">
+                        <div className="text-[10px] text-[#94A3B8]">
+                          الرونة النشطة: <strong style={{ color: SKILL_RUNES[equippedRuneId].color }}>{SKILL_RUNES[equippedRuneId].name}</strong>
+                        </div>
+                        <div className="flex flex-wrap gap-1">
+                          {SKILL_RUNE_LIST.map((r) => {
+                            const ownedRune = profile.unlockedRunes?.includes(r.id) || r.id === 'standard';
+                            const isEq = equippedRuneId === r.id;
+                            return (
+                              <button
+                                key={r.id}
+                                type="button"
+                                title={r.shortDesc}
+                                onClick={() => {
+                                  const res = onUnlockOrEquipRune(pw.id, r.id);
+                                  onNotify(res.message);
+                                }}
+                                className={`px-2 py-0.5 rounded text-[10px] font-bold border cursor-pointer transition-colors ${
+                                  isEq
+                                    ? 'bg-[#172844] text-[#F8FAFC]'
+                                    : ownedRune
+                                      ? 'bg-[#0B1220] text-[#CBD5E1] border-white/15 hover:border-white/35'
+                                      : 'bg-[#080C16] text-[#94A3B8] border-white/10 hover:border-[#E6B85C]/40'
+                                }`}
+                                style={isEq ? { borderColor: r.color, color: r.color } : undefined}
+                              >
+                                {r.name}
+                                {!ownedRune ? ` (${r.costGold}ذ)` : ''}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
                   </div>
 
                   <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-white/10">
@@ -295,7 +506,7 @@ export const SkillNetworkAndFusionPanel: React.FC<SkillNetworkAndFusionPanelProp
                         </span>
                       </button>
                     ) : unlocked ? (
-                      <span className="text-[11px] font-bold text-[#10B981]">الحد الأقصى Lv.5</span>
+                      <span className="text-[11px] font-bold text-[#10B981]">الحد الأقصى Lv.5 ({rank})</span>
                     ) : (
                       <span className="text-[11px] text-[#94A3B8]">{pw.tagline}</span>
                     )}
@@ -303,25 +514,32 @@ export const SkillNetworkAndFusionPanel: React.FC<SkillNetworkAndFusionPanelProp
                     <button
                       type="button"
                       onClick={() => {
-                        const res = onUnlockOrEquipPower(pw.id, effectiveTarget);
+                        const res = onUnlockOrEquipPower(pw.id, effectiveTarget, editingDeck);
                         onNotify(res.message);
                         if (res.ok) onTriggerPreviewPower();
                       }}
-                      className={`px-3 py-1.5 text-xs font-bold rounded-lg cursor-pointer whitespace-nowrap ${
-                        isActiveInTarget
-                          ? 'bg-[#132924] text-[#10B981] border border-[#10B981]/40'
-                          : unlocked
-                            ? 'bg-[#1D2D4D] hover:bg-[#273C66] text-[#F1F5F9]'
-                            : 'system-btn-primary'
+                      className={`px-3 py-1.5 text-xs font-bold rounded-lg cursor-pointer whitespace-nowrap flex items-center gap-1 ${
+                        !req.met
+                          ? 'bg-[#241318] text-[#FCA5A5] border border-[#EF4444]/40'
+                          : isActiveInTarget
+                            ? 'bg-[#132924] text-[#10B981] border border-[#10B981]/40'
+                            : unlocked
+                              ? 'bg-[#1D2D4D] hover:bg-[#273C66] text-[#F1F5F9]'
+                              : 'system-btn-primary'
                       }`}
                     >
-                      {isActiveInTarget
-                        ? `مجهزة [${targetKey}]`
-                        : unlocked
-                          ? `تعيين [${targetKey}]`
-                          : pw.costGems > 0
-                            ? `شراء (${pw.costGold} + ${pw.costGems}ج)`
-                            : `شراء (${pw.costGold} ذهب)`}
+                      {!req.met && <Lock className="w-3 h-3 shrink-0" />}
+                      <span>
+                        {!req.met
+                          ? 'متطلبات ناقصة'
+                          : isActiveInTarget
+                            ? `مجهزة [${targetKey}]`
+                            : unlocked
+                              ? `تعيين [${targetKey}]`
+                              : pw.costGems > 0
+                                ? `شراء (${pw.costGold} + ${pw.costGems}ج)`
+                                : `شراء (${pw.costGold} ذهب)`}
+                      </span>
                     </button>
                   </div>
                 </div>
@@ -439,7 +657,7 @@ export const SkillNetworkAndFusionPanel: React.FC<SkillNetworkAndFusionPanelProp
               </div>
               <p className="text-xs text-[#CBD5E1]">{selectedNode.description}</p>
             </div>
-            <div className="shrink-0">
+            <div className="flex flex-wrap items-center gap-2 shrink-0">
               {profile.unlockedNetworkNodes.includes(selectedNode.id) ? (
                 <span className="px-3.5 py-2 rounded-lg bg-[#112722] border border-[#10B981]/35 text-xs font-bold text-[#10B981] inline-block">
                   مُفعَّلة في الشبكة
@@ -456,30 +674,149 @@ export const SkillNetworkAndFusionPanel: React.FC<SkillNetworkAndFusionPanelProp
                   تفعيل ({selectedNode.costGold} ذهب + {selectedNode.costMarks} وسام)
                 </button>
               )}
+
+              {onRespecNetworkNodes && profile.unlockedNetworkNodes.length > 1 && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    const res = onRespecNetworkNodes();
+                    onNotify(res.message);
+                  }}
+                  className="min-h-[42px] px-3 py-2 text-xs font-bold rounded-lg bg-[#241418] hover:bg-[#351B22] text-[#FCA5A5] border border-[#EF4444]/35 flex items-center gap-1.5 cursor-pointer whitespace-nowrap"
+                >
+                  <RotateCcw className="w-3.5 h-3.5" />
+                  <span>إعادة توزيع واسترداد</span>
+                </button>
+              )}
             </div>
           </div>
         </div>
       )}
 
-      {/* SUB-TAB 3: SKILL FUSION LABORATORY */}
+      {/* SUB-TAB 3: UNIVERSAL DYNAMIC SYNTHESIS + CLASSIC FUSION LABORATORY */}
       {subTab === 'fusion' && (
-        <div className="space-y-3">
+        <div className="space-y-4">
+          {/* Universal Dynamic Skill Synthesis Matrix */}
+          {onSynthesizeDynamicSkill && (
+            <div className="p-4 rounded-xl bg-gradient-to-br from-[#0F1B33] to-[#1A1130] border border-[#38BDF8]/45 space-y-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <h4 className="font-display text-sm sm:text-base font-bold text-[#F8FAFC] flex items-center gap-1.5">
+                    <Wand2 className="w-4 h-4 text-[#38BDF8]" />
+                    <span>مختبر الدمج الشبكي الحر وابتكار المهارات</span>
+                  </h4>
+                  <p className="text-[11px] text-[#94A3B8] mt-0.5">
+                    اختر أي مهارتين مفتوحتين: تحدد المهارة الأولى «الشكل القتالي» والثانية «العنصر»، أو يكتشف النظام وصفة كلاسيكية تلقائياً!
+                  </p>
+                </div>
+                <span className="font-mono-num text-[11px] px-2.5 py-1 rounded bg-[#0A0F1A] border border-[#38BDF8]/30 text-[#38BDF8]">
+                  المبتكرة: {customSkills.length}/12
+                </span>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+                <label className="space-y-1">
+                  <span className="text-[#CBD5E1] font-semibold">المهارة الأساسية (الشكل القتالي)</span>
+                  <select
+                    value={synthA}
+                    onChange={(e) => setSynthA(e.target.value as PowerId)}
+                    className="w-full px-3 py-2 rounded-lg bg-[#0A0F1A] border border-white/15 text-[#F8FAFC]"
+                  >
+                    {unlockedSkillDefs.map((pw) => (
+                      <option key={`sa_${pw.id}`} value={pw.id}>
+                        {pw.name} ({SYNTHESIS_GEOMETRY_META[pw.motionKind || 'aoe_burst'].label})
+                      </option>
+                    ))}
+                  </select>
+                </label>
+
+                <label className="space-y-1">
+                  <span className="text-[#CBD5E1] font-semibold">المهارة الثانوية (العنصر والتأثير)</span>
+                  <select
+                    value={synthB}
+                    onChange={(e) => setSynthB(e.target.value as PowerId)}
+                    className="w-full px-3 py-2 rounded-lg bg-[#0A0F1A] border border-white/15 text-[#F8FAFC]"
+                  >
+                    {unlockedSkillDefs.map((pw) => (
+                      <option key={`sb_${pw.id}`} value={pw.id}>
+                        {pw.name} ({ELEMENT_META[pw.element || 'fire'].label})
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+
+              <div className="p-3 rounded-lg bg-[#0A0F1A]/85 border border-white/10 text-xs flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                {previewClassicMatch ? (
+                  <div className="space-y-1 text-[#E9D5FF]">
+                    <div>
+                      <span className="font-bold text-[#C084FC]">تطابق وصفة أسطورية: </span>
+                      {previewClassicMatch.name} (تُفتح تلقائياً عند توفر المستوى 2 لكل منهما)
+                    </div>
+                    {previewClassicReq && !previewClassicReq.met && (
+                      <div className="text-[11px] font-bold text-[#FCA5A5]">
+                        متطلبات السمات الناقصة: {previewClassicReq.missingLabels.join(' · ')}
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  <div className="space-y-0.5">
+                    <div className="font-bold text-[#F8FAFC]">
+                      المزيج الناتج: <span className="text-[#38BDF8]">{SYNTHESIS_GEOMETRY_META[previewMotion].label}</span> +{' '}
+                      <span style={{ color: ELEMENT_META[previewElement].color }}>{ELEMENT_META[previewElement].label}</span>
+                    </div>
+                    <div className="text-[11px] text-[#94A3B8]">
+                      ضرر تقديري {Math.round((synthDefA.damage + synthDefB.damage) * 0.78)} · مدى{' '}
+                      {Math.max(synthDefA.radius, synthDefB.radius, 6.2).toFixed(1)}م · يطبق حالة «{ELEMENT_META[previewElement].statusLabel}»
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
+                <input
+                  type="text"
+                  maxLength={32}
+                  value={synthName}
+                  onChange={(e) => setSynthName(e.target.value)}
+                  placeholder="سمِّ مهارتك الجديدة (اختياري) مثال: إعصار الجحيم..."
+                  className="flex-1 px-3 py-2 text-xs bg-[#0A0F1A] border border-white/15 rounded-lg text-[#F8FAFC] focus:outline-none focus:border-[#38BDF8]"
+                />
+                <button
+                  type="button"
+                  onClick={() => {
+                    const res = onSynthesizeDynamicSkill(synthA, synthB, synthName);
+                    onNotify(res.message);
+                    if (res.ok) {
+                      setSynthName('');
+                      onTriggerPreviewPower();
+                    }
+                  }}
+                  className="px-4 py-2 text-xs font-bold rounded-lg bg-gradient-to-r from-[#38BDF8] to-[#818CF8] text-[#0A0F1A] hover:brightness-105 cursor-pointer whitespace-nowrap"
+                >
+                  {previewClassicMatch ? 'إتمام الوصفة الكلاسيكية' : 'دمج وابتكار (520ذ + 12وسام)'}
+                </button>
+              </div>
+            </div>
+          )}
+
           <div className="p-3 rounded-xl bg-[#160F29] border border-[#C084FC]/35 text-xs text-[#E9D5FF]">
-            مختبر الدمج يجمع بين مهارتين أساسيتين (بشرط فتحهما وترقيتهما إلى <strong>المستوى 2</strong> على الأقل) لصناعة مهارة مدمجة فائقة القوة.
+            الوصفات الكلاسيكية الثابتة (تتطلب فتح المهارتين وترقيتهما إلى <strong>المستوى 2</strong> على الأقل):
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
             {FUSION_POWER_LIST.map((fusion) => {
               const isUnlocked = profile.unlockedPowers.includes(fusion.id);
               const [pA, pB] = fusion.fusionPair || ['inferno_nova', 'thunder_strike'];
-              const defA = POWERS[pA];
-              const defB = POWERS[pB];
+              const defA = resolvePowerDef(pA, customSkills);
+              const defB = resolvePowerDef(pB, customSkills);
               const ownedA = profile.unlockedPowers.includes(pA);
               const ownedB = profile.unlockedPowers.includes(pB);
               const lvA = profile.powerLevels[pA] || 1;
               const lvB = profile.powerLevels[pB] || 1;
               const readyA = ownedA && lvA >= 2;
               const readyB = ownedB && lvB >= 2;
+              const req = checkPowerRequirements(fusion, profile.avatar.stats, profile.level);
 
               return (
                 <div
@@ -501,6 +838,22 @@ export const SkillNetworkAndFusionPanel: React.FC<SkillNetworkAndFusionPanelProp
                       </span>
                     </div>
                     <p className="text-xs text-[#CBD5E1] leading-relaxed">{fusion.description}</p>
+                    {req.allLabels.length > 0 && (
+                      <div
+                        className={`px-2 py-1 rounded-lg text-[10px] font-bold border flex items-center gap-1.5 ${
+                          req.met
+                            ? 'bg-[#0C1D1A] border-[#10B981]/30 text-[#6EE7B7]'
+                            : 'bg-[#231216] border-[#EF4444]/40 text-[#FCA5A5]'
+                        }`}
+                      >
+                        {req.met ? <Unlock className="w-3 h-3 shrink-0" /> : <Lock className="w-3 h-3 shrink-0" />}
+                        <span>
+                          {req.met
+                            ? `المتطلبات مكتملة: ${req.allLabels.join(' · ')}`
+                            : `ينقصك للدمج: ${req.missingLabels.join(' · ')}`}
+                        </span>
+                      </div>
+                    )}
 
                     {/* Recipe Ingredients */}
                     <div className="grid grid-cols-2 gap-2 pt-1 text-[11px]">
@@ -548,9 +901,14 @@ export const SkillNetworkAndFusionPanel: React.FC<SkillNetworkAndFusionPanelProp
                             onNotify(res.message);
                             if (res.ok) onTriggerPreviewPower();
                           }}
-                          className="min-h-[38px] px-3.5 py-1.5 text-xs font-bold rounded-lg system-btn-primary cursor-pointer whitespace-nowrap"
+                          className={`min-h-[38px] px-3.5 py-1.5 text-xs font-bold rounded-lg cursor-pointer whitespace-nowrap flex items-center gap-1 ${
+                            req.met
+                              ? 'system-btn-primary'
+                              : 'bg-[#241318] text-[#FCA5A5] border border-[#EF4444]/40'
+                          }`}
                         >
-                          دمج وصناعة المهارة
+                          {!req.met && <Lock className="w-3 h-3 shrink-0" />}
+                          <span>{req.met ? 'دمج وصناعة المهارة' : 'متطلبات ناقصة'}</span>
                         </button>
                       </>
                     )}

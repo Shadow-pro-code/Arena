@@ -3,6 +3,7 @@ import {
   ArrowUpCircle,
   Check,
   Gift,
+  Hammer,
   Lock,
   Shield,
   Sparkles,
@@ -13,31 +14,39 @@ import type {
   ConsumableId,
   GearId,
   GearSlot,
+  OverworldNodeKind,
   PlayerProfile,
   WeaponId,
   WeaponRole,
 } from '../types/game';
 import {
   CONSUMABLE_LIST,
+  CRAFTING_RECIPES,
   GEAR_ITEMS,
   GEAR_LIST,
+  GEAR_SETS,
+  RANK_META,
   WEAPONS,
   WEAPON_LIST,
   computeFighterDerivedStats,
+  getGearRank,
+  getWeaponRank,
 } from '../data/gameCatalog';
 import { AvatarPreview3D } from './AvatarPreview3D';
 
 interface ArmoryViewProps {
   profile: PlayerProfile;
   onUnlockOrEquip: (weaponId: WeaponId) => { ok: boolean; message: string };
-  onUpgradeWeapon: (weaponId: WeaponId) => { ok: boolean; message: string };
+  onUpgradeWeapon: (weaponId: WeaponId, useStone?: boolean) => { ok: boolean; message: string };
   onUnlockOrEquipGear: (gearId: GearId) => { ok: boolean; message: string };
+  onUpgradeGear?: (gearId: GearId, useStone?: boolean) => { ok: boolean; message: string };
   onUnequipGear: (slot: GearSlot) => void;
   onBuyConsumable: (id: ConsumableId, qty?: number) => { ok: boolean; message: string };
+  onCraftRecipe?: (recipeId: string) => { ok: boolean; message: string };
   onBuyChest: (type: 'warrior' | 'mythic') => boolean;
 }
 
-type ShopTab = 'weapons' | 'gear' | 'consumables';
+type ShopTab = 'weapons' | 'gear' | 'consumables' | 'crafting';
 type RoleFilter = 'all' | WeaponRole;
 type GearFilter = 'all' | GearSlot;
 
@@ -59,8 +68,10 @@ export const ArmoryView: React.FC<ArmoryViewProps> = ({
   onUnlockOrEquip,
   onUpgradeWeapon,
   onUnlockOrEquipGear,
+  onUpgradeGear,
   onUnequipGear,
   onBuyConsumable,
+  onCraftRecipe,
   onBuyChest,
 }) => {
   const [shopTab, setShopTab] = useState<ShopTab>('weapons');
@@ -86,12 +97,20 @@ export const ArmoryView: React.FC<ArmoryViewProps> = ({
   const upgradeCost = level * 220;
   const scaledDmg = Math.round(inspected.damage * (1 + (level - 1) * 0.16));
   const scaledHeavy = Math.round(inspected.heavyDamage * (1 + (level - 1) * 0.16));
+  const inspectedRank = getWeaponRank(inspectedId, level);
+  const inspectedRankMeta = RANK_META[inspectedRank];
 
+  const equippedWeapon = WEAPONS[profile.avatar.weaponId];
   const weaponLvEquipped = profile.weaponLevels[profile.avatar.weaponId] || 1;
+  const eqScaledDmg = Math.round(equippedWeapon.damage * (1 + (weaponLvEquipped - 1) * 0.16));
+  const eqScaledHeavy = Math.round(equippedWeapon.heavyDamage * (1 + (weaponLvEquipped - 1) * 0.16));
+
   const derivedWithGear = computeFighterDerivedStats(
     profile.avatar,
     weaponLvEquipped,
-    profile.equippedGear
+    profile.equippedGear,
+    profile.gearLevels,
+    profile.unlockedNetworkNodes
   );
 
   const filteredWeapons =
@@ -115,10 +134,10 @@ export const ArmoryView: React.FC<ArmoryViewProps> = ({
       <div className="flex flex-wrap items-end justify-between gap-4 border-b border-[#E6B85C]/20 pb-5 landscape-compact-header">
         <div>
           <h1 className="font-display ui-section-title font-extrabold text-[#F1F5F9]">
-            المتجر والترسانة والسامان
+            المتجر والترسانة والسامان والصياغة
           </h1>
           <p className="text-sm text-[#94A3B8] mt-1">
-            اختر سلاحك من 12 نوعاً (قتال قريب، سحر، دعم، دفاع)، جهّز 3 خانات سامان، وتزوّد بالجرعات والصناديق.
+            أسلحة ومعدات برتب المحارب ({'E → SS'}) · مكافآت أطقم السامان · ترقية المستويات · وطاولة الصياغة من موارد القارة.
           </p>
         </div>
         <div className="text-sm text-[#CBD5E1] flex flex-wrap items-center gap-3 bg-[#101829]/85 border border-[#E6B85C]/20 rounded-xl px-4 py-2">
@@ -131,7 +150,11 @@ export const ArmoryView: React.FC<ArmoryViewProps> = ({
           </span>
           <span aria-hidden="true" className="text-[#475569]">·</span>
           <span>
-            شارات النقابة: <strong className="font-mono-num text-[#10B981]">{profile.guildMarks}</strong>
+            الأوسمة: <strong className="font-mono-num text-[#10B981]">{profile.guildMarks}</strong>
+          </span>
+          <span aria-hidden="true" className="text-[#475569]">·</span>
+          <span>
+            أحجار الصقل: <strong className="font-mono-num text-[#FDE047]">{profile.sharpeningStones || 0}</strong>
           </span>
         </div>
       </div>
@@ -141,8 +164,9 @@ export const ArmoryView: React.FC<ArmoryViewProps> = ({
         {(
           [
             { id: 'weapons', label: `1. متجر الأسلحة (${WEAPON_LIST.length})` },
-            { id: 'gear', label: `2. متجر السامان والمعدات (${GEAR_LIST.length})` },
-            { id: 'consumables', label: '3. الجرعات والصناديق' },
+            { id: 'gear', label: `2. السامان والأطقم (${GEAR_LIST.length})` },
+            { id: 'consumables', label: `3. الجرعات والأدوات (${CONSUMABLE_LIST.length})` },
+            { id: 'crafting', label: `4. طاولة الصياغة (${CRAFTING_RECIPES.length})` },
           ] as const
         ).map((t) => (
           <button
@@ -200,11 +224,23 @@ export const ArmoryView: React.FC<ArmoryViewProps> = ({
             <section className="lg:col-span-5 landscape-span-5 flex flex-col bg-[#121B2D]/90 backdrop-blur-md border border-[#E6B85C]/20 rounded-xl overflow-hidden shadow-xl">
               <div className="flex items-center justify-between px-4 py-3 border-b border-white/10 bg-[#0D1422]/60">
                 <div>
-                  <h2 className="font-display text-base font-bold text-[#F1F5F9]">
-                    {inspected.name}
-                  </h2>
+                  <div className="flex items-center gap-2">
+                    <h2 className="font-display text-base font-bold text-[#F1F5F9]">
+                      {inspected.name}
+                    </h2>
+                    <span
+                      className="text-[10px] font-mono-num font-extrabold px-1.5 py-0.5 rounded border"
+                      style={{
+                        color: inspectedRankMeta.color,
+                        backgroundColor: inspectedRankMeta.bg,
+                        borderColor: inspectedRankMeta.border,
+                      }}
+                    >
+                      {inspectedRank}
+                    </span>
+                  </div>
                   <p className="text-xs text-[#94A3B8]">
-                    {inspected.category} · المستوى <span className="font-mono-num">{level}/5</span>
+                    {inspected.category} · المستوى <span className="font-mono-num">{level}/5</span> ({inspectedRankMeta.perkDesc})
                   </p>
                 </div>
                 <button
@@ -237,11 +273,25 @@ export const ArmoryView: React.FC<ArmoryViewProps> = ({
                   </div>
                   <div className="flex justify-between">
                     <span className="text-[#8F9BAE]">الضرر الأساسي</span>
-                    <span className="font-mono-num font-semibold text-[#F2F4F8]">{scaledDmg}</span>
+                    <span className="font-mono-num font-semibold text-[#F2F4F8]">
+                      {scaledDmg}
+                      {!isEquipped && scaledDmg !== eqScaledDmg && (
+                        <span className={`mr-1.5 ${scaledDmg > eqScaledDmg ? 'text-[#10B981]' : 'text-[#EF4444]'}`}>
+                          ({scaledDmg > eqScaledDmg ? '+' : ''}{scaledDmg - eqScaledDmg})
+                        </span>
+                      )}
+                    </span>
                   </div>
                   <div className="flex justify-between">
                     <span className="text-[#8F9BAE]">مهارة السلاح ({inspected.heavySkillName})</span>
-                    <span className="font-mono-num font-semibold text-[#F59E0B]">{scaledHeavy}</span>
+                    <span className="font-mono-num font-semibold text-[#F59E0B]">
+                      {scaledHeavy}
+                      {!isEquipped && scaledHeavy !== eqScaledHeavy && (
+                        <span className={`mr-1.5 ${scaledHeavy > eqScaledHeavy ? 'text-[#10B981]' : 'text-[#EF4444]'}`}>
+                          ({scaledHeavy > eqScaledHeavy ? '+' : ''}{scaledHeavy - eqScaledHeavy})
+                        </span>
+                      )}
+                    </span>
                   </div>
                   <div className="flex justify-between">
                     <span className="text-[#8F9BAE]">سرعة الهجوم / المدى</span>
@@ -251,7 +301,14 @@ export const ArmoryView: React.FC<ArmoryViewProps> = ({
                   </div>
                   <div className="flex justify-between">
                     <span className="text-[#8F9BAE]">إضافة الضربة الحاسمة</span>
-                    <span className="font-mono-num text-[#10B981]">+{inspected.critBonus}%</span>
+                    <span className="font-mono-num text-[#10B981]">
+                      +{inspected.critBonus}%
+                      {!isEquipped && inspected.critBonus !== equippedWeapon.critBonus && (
+                        <span className={`mr-1.5 ${inspected.critBonus > equippedWeapon.critBonus ? 'text-[#34D399]' : 'text-[#EF4444]'}`}>
+                          ({inspected.critBonus > equippedWeapon.critBonus ? '+' : ''}{inspected.critBonus - equippedWeapon.critBonus}%)
+                        </span>
+                      )}
+                    </span>
                   </div>
                   {inspected.armorBonus ? (
                     <div className="flex justify-between">
@@ -271,14 +328,14 @@ export const ArmoryView: React.FC<ArmoryViewProps> = ({
                   ) : null}
                 </div>
 
-                <div className="flex items-center gap-3 pt-1">
+                <div className="flex flex-wrap items-center gap-2 pt-1">
                   <button
                     type="button"
                     onClick={() => {
                       const res = onUnlockOrEquip(inspectedId);
                       showNotice(res.message);
                     }}
-                    className={`flex-1 py-2.5 px-4 text-sm font-bold rounded-lg transition-colors flex items-center justify-center gap-2 cursor-pointer ${
+                    className={`flex-1 min-w-[140px] py-2.5 px-4 text-sm font-bold rounded-lg transition-colors flex items-center justify-center gap-2 cursor-pointer ${
                       isEquipped
                         ? 'bg-[#172B29] text-[#10B981] border border-[#10B981]/30'
                         : 'bg-[#E6B85C] hover:bg-[#F5D076] text-[#0A0F1A]'
@@ -309,13 +366,27 @@ export const ArmoryView: React.FC<ArmoryViewProps> = ({
                     <button
                       type="button"
                       onClick={() => {
-                        const res = onUpgradeWeapon(inspectedId);
+                        const res = onUpgradeWeapon(inspectedId, false);
                         showNotice(res.message);
                       }}
-                      className="py-2.5 px-4 text-xs font-bold text-[#F1F5F9] bg-[#18253C] hover:bg-[#223454] border border-white/15 rounded-lg flex items-center gap-1.5 whitespace-nowrap cursor-pointer"
+                      className="py-2.5 px-3 text-xs font-bold text-[#F1F5F9] bg-[#18253C] hover:bg-[#223454] border border-white/15 rounded-lg flex items-center gap-1.5 whitespace-nowrap cursor-pointer"
                     >
                       <ArrowUpCircle className="w-4 h-4 text-[#E6B85C]" />
                       <span>ترقية ({upgradeCost} ذهب)</span>
+                    </button>
+                  )}
+
+                  {isUnlocked && level < 5 && (profile.sharpeningStones || 0) > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const res = onUpgradeWeapon(inspectedId, true);
+                        showNotice(res.message);
+                      }}
+                      className="py-2.5 px-3 text-xs font-bold text-[#0A0F1A] bg-[#FDE047] hover:bg-[#FEF08A] rounded-lg flex items-center gap-1.5 whitespace-nowrap cursor-pointer"
+                    >
+                      <Sparkles className="w-4 h-4" />
+                      <span>صقل مجاني (×1 حجر)</span>
                     </button>
                   )}
                 </div>
@@ -330,6 +401,8 @@ export const ArmoryView: React.FC<ArmoryViewProps> = ({
                 const selected = inspectedId === w.id;
                 const lv = profile.weaponLevels[w.id] || 1;
                 const dmg = Math.round(w.damage * (1 + (lv - 1) * 0.16));
+                const wRank = getWeaponRank(w.id, lv);
+                const wRankMeta = RANK_META[wRank];
 
                 return (
                   <button
@@ -344,8 +417,14 @@ export const ArmoryView: React.FC<ArmoryViewProps> = ({
                   >
                     <div className="space-y-1.5">
                       <div className="flex items-center justify-between gap-2">
-                        <span className="font-display text-base font-bold text-[#F1F5F9]">
-                          {w.name}
+                        <span className="font-display text-base font-bold text-[#F1F5F9] flex items-center gap-1.5">
+                          <span>{w.name}</span>
+                          <span
+                            className="text-[10px] font-mono-num px-1.5 py-0.5 rounded border"
+                            style={{ color: wRankMeta.color, backgroundColor: wRankMeta.bg, borderColor: wRankMeta.border }}
+                          >
+                            {wRank}
+                          </span>
                         </span>
                         <span className="text-xs font-mono-num text-[#94A3B8]">
                           {unlocked
@@ -420,6 +499,7 @@ export const ArmoryView: React.FC<ArmoryViewProps> = ({
               {GEAR_SLOTS.map(({ slot, title }) => {
                 const gId = profile.equippedGear[slot];
                 const gear = gId ? GEAR_ITEMS[gId] : null;
+                const gLv = gId ? profile.gearLevels?.[gId] || 1 : 1;
                 return (
                   <div
                     key={slot}
@@ -430,7 +510,7 @@ export const ArmoryView: React.FC<ArmoryViewProps> = ({
                       {gear ? (
                         <>
                           <div className="font-display text-sm font-bold text-[#F1F5F9]">
-                            {gear.name}
+                            {gear.name} <span className="font-mono-num text-xs text-[#38BDF8]">Lv.{gLv}</span>
                           </div>
                           <div className="text-xs text-[#CBD5E1]">{gear.description}</div>
                         </>
@@ -451,6 +531,27 @@ export const ArmoryView: React.FC<ArmoryViewProps> = ({
                   </div>
                 );
               })}
+            </div>
+
+            {/* Active Gear Set Bonuses Bar */}
+            <div className="pt-3 border-t border-white/10">
+              {derivedWithGear.activeSetBonuses.length > 0 ? (
+                <div className="flex flex-wrap items-center gap-2 text-xs">
+                  <span className="font-bold text-[#E6B85C]">مكافآت الأطقم المفعّلة:</span>
+                  {derivedWithGear.activeSetBonuses.map((sb, i) => (
+                    <span
+                      key={`${sb.setId}_${i}`}
+                      className="px-2.5 py-1 rounded-lg bg-[#16233B] border border-[#38BDF8]/35 text-[#F1F5F9]"
+                    >
+                      <strong>{sb.name} ({sb.count}/3):</strong> {sb.label}
+                    </span>
+                  ))}
+                </div>
+              ) : (
+                <div className="text-xs text-[#94A3B8]">
+                  نصيحة: جهّز قطعتين أو ثلاثاً من نفس الطقم (التنين الفتّاك، الحصن المنيع، الأثير والرياح) لتفعيل مكافآت الطقم!
+                </div>
+              )}
             </div>
           </section>
 
@@ -483,6 +584,21 @@ export const ArmoryView: React.FC<ArmoryViewProps> = ({
             {filteredGear.map((g) => {
               const unlocked = profile.unlockedGear.includes(g.id);
               const equipped = profile.equippedGear[g.slot] === g.id;
+              const gLv = profile.gearLevels?.[g.id] || 1;
+              const gScale = 1 + (gLv - 1) * 0.16;
+              const gRank = getGearRank(g.id, gLv);
+              const gRankMeta = RANK_META[gRank];
+              const setDef = g.setId ? GEAR_SETS[g.setId] : null;
+              const eqSlotId = profile.equippedGear[g.slot];
+              const eqSlotDef = eqSlotId && eqSlotId !== g.id ? GEAR_ITEMS[eqSlotId] : null;
+              const eqSlotScale = eqSlotId ? 1 + ((profile.gearLevels?.[eqSlotId] || 1) - 1) * 0.16 : 1;
+              const dmgDiff = eqSlotDef
+                ? Math.round(g.dmgBonus * gScale) - Math.round(eqSlotDef.dmgBonus * eqSlotScale)
+                : 0;
+              const hpDiff = eqSlotDef
+                ? Math.round(g.hpBonus * gScale) - Math.round(eqSlotDef.hpBonus * eqSlotScale)
+                : 0;
+
               return (
                 <div
                   key={g.id}
@@ -497,46 +613,99 @@ export const ArmoryView: React.FC<ArmoryViewProps> = ({
                       <span className="text-xs font-semibold" style={{ color: g.accentColor }}>
                         {g.slotLabel}
                       </span>
-                      <Shield className="w-4 h-4" style={{ color: g.accentColor }} />
+                      <div className="flex items-center gap-1.5">
+                        <span
+                          className="text-[10px] font-mono-num font-extrabold px-1.5 py-0.5 rounded border"
+                          style={{ color: gRankMeta.color, backgroundColor: gRankMeta.bg, borderColor: gRankMeta.border }}
+                        >
+                          {gRank} · Lv.{gLv}/5
+                        </span>
+                        <Shield className="w-4 h-4" style={{ color: g.accentColor }} />
+                      </div>
                     </div>
                     <h3 className="font-display text-base font-bold text-[#F1F5F9]">{g.name}</h3>
+                    {setDef && (
+                      <div className="text-[11px] font-semibold" style={{ color: setDef.accentColor }}>
+                        طقم: {setDef.name}
+                      </div>
+                    )}
                     <p className="text-xs text-[#CBD5E1] leading-relaxed">{g.description}</p>
                     <div className="flex flex-wrap gap-x-3 gap-y-1 text-[11px] font-mono-num text-[#CBD5E1] pt-1">
-                      {g.hpBonus > 0 && <span>+{g.hpBonus} صحة</span>}
-                      {g.dmgBonus > 0 && <span className="text-[#E6B85C]">+{g.dmgBonus} هجوم</span>}
-                      {g.speedBonus > 0 && <span className="text-[#38BDF8]">+{g.speedBonus} سرعة</span>}
-                      {g.armorBonus > 0 && (
-                        <span className="text-[#10B981]">+{Math.round(g.armorBonus * 100)}% درع</span>
+                      {g.hpBonus > 0 && <span>+{Math.round(g.hpBonus * gScale)} صحة</span>}
+                      {g.dmgBonus > 0 && <span className="text-[#E6B85C]">+{Math.round(g.dmgBonus * gScale)} هجوم</span>}
+                      {g.speedBonus > 0 && (
+                        <span className="text-[#38BDF8]">+{(g.speedBonus * (1 + (gLv - 1) * 0.08)).toFixed(2)} سرعة</span>
                       )}
-                      {g.critBonus > 0 && <span className="text-[#FDE047]">+{g.critBonus}% حاسمة</span>}
+                      {g.armorBonus > 0 && (
+                        <span className="text-[#10B981]">+{Math.round(g.armorBonus * (1 + (gLv - 1) * 0.1) * 100)}% درع</span>
+                      )}
+                      {g.critBonus > 0 && <span className="text-[#FDE047]">+{Math.round(g.critBonus * gScale)}% حاسمة</span>}
                       {g.pwrScaleBonus > 0 && (
-                        <span className="text-[#C084FC]">+{Math.round(g.pwrScaleBonus * 100)}% قدرة</span>
+                        <span className="text-[#C084FC]">+{Math.round(g.pwrScaleBonus * gScale * 100)}% قدرة</span>
                       )}
                     </div>
+                    {eqSlotDef && (hpDiff !== 0 || dmgDiff !== 0) && (
+                      <div className="text-[10px] font-mono-num text-[#94A3B8]">
+                        مقارنة بالمجهّز:{' '}
+                        {hpDiff !== 0 && (
+                          <span className={hpDiff > 0 ? 'text-[#10B981]' : 'text-[#EF4444]'}>
+                            {hpDiff > 0 ? `+${hpDiff}` : hpDiff} صحة{' '}
+                          </span>
+                        )}
+                        {dmgDiff !== 0 && (
+                          <span className={dmgDiff > 0 ? 'text-[#10B981]' : 'text-[#EF4444]'}>
+                            {dmgDiff > 0 ? `+${dmgDiff}` : dmgDiff} هجوم
+                          </span>
+                        )}
+                      </div>
+                    )}
                   </div>
 
-                  <button
-                    type="button"
-                    onClick={() => {
-                      const res = onUnlockOrEquipGear(g.id);
-                      showNotice(res.message);
-                    }}
-                    className={`w-full py-2.5 px-4 text-xs font-bold rounded-lg transition-colors cursor-pointer ${
-                      equipped
-                        ? 'bg-[#172B29] text-[#10B981] border border-[#10B981]/30'
+                  <div className="space-y-2">
+                    {unlocked && onUpgradeGear && gLv < 5 && (
+                      <div className="flex items-center gap-1.5">
+                        <button
+                          type="button"
+                          onClick={() => showNotice(onUpgradeGear(g.id, false).message)}
+                          className="flex-1 py-1.5 px-2.5 text-[11px] font-bold rounded-lg bg-[#16233D] hover:bg-[#1F3154] text-[#E6B85C] border border-[#E6B85C]/30 cursor-pointer"
+                        >
+                          ترقية Lv.{gLv + 1} ({gLv * 210}ذ + {gLv * 4}وسام)
+                        </button>
+                        {(profile.sharpeningStones || 0) > 0 && (
+                          <button
+                            type="button"
+                            onClick={() => showNotice(onUpgradeGear(g.id, true).message)}
+                            className="py-1.5 px-2.5 text-[11px] font-bold rounded-lg bg-[#FDE047] hover:bg-[#FEF08A] text-[#0A0F1A] cursor-pointer"
+                          >
+                            حجر صقل
+                          </button>
+                        )}
+                      </div>
+                    )}
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const res = onUnlockOrEquipGear(g.id);
+                        showNotice(res.message);
+                      }}
+                      className={`w-full py-2.5 px-4 text-xs font-bold rounded-lg transition-colors cursor-pointer ${
+                        equipped
+                          ? 'bg-[#172B29] text-[#10B981] border border-[#10B981]/30'
+                          : unlocked
+                            ? 'bg-[#1D2B44] hover:bg-[#273A5C] text-[#F1F5F9]'
+                            : 'bg-[#E6B85C] hover:bg-[#F5D076] text-[#0A0F1A]'
+                      }`}
+                    >
+                      {equipped
+                        ? 'مُجهَّز في الخانة'
                         : unlocked
-                          ? 'bg-[#1D2B44] hover:bg-[#273A5C] text-[#F1F5F9]'
-                          : 'bg-[#E6B85C] hover:bg-[#F5D076] text-[#0A0F1A]'
-                    }`}
-                  >
-                    {equipped
-                      ? 'مُجهَّز في الخانة'
-                      : unlocked
-                        ? 'تجهيز السامان'
-                        : g.costGems > 0
-                          ? `شراء (${g.costGold} ذهب + ${g.costGems} جوهرة)`
-                          : `شراء (${g.costGold} ذهب)`}
-                  </button>
+                          ? 'تجهيز السامان'
+                          : g.costGems > 0
+                            ? `شراء (${g.costGold} ذهب + ${g.costGems} جوهرة)`
+                            : `شراء (${g.costGold} ذهب)`}
+                    </button>
+                  </div>
                 </div>
               );
             })}
@@ -645,6 +814,103 @@ export const ArmoryView: React.FC<ArmoryViewProps> = ({
                 شراء (18 جوهرة)
               </button>
             </div>
+          </section>
+        </div>
+      )}
+
+      {/* TAB 4: OVERWORLD RESOURCE CRAFTING WORKBENCH */}
+      {shopTab === 'crafting' && (
+        <div className="space-y-6">
+          <section className="p-5 rounded-xl bg-[#121B2D]/90 border border-[#38BDF8]/30 flex flex-wrap items-center justify-between gap-4">
+            <div>
+              <h2 className="font-display text-lg font-bold text-[#F1F5F9] flex items-center gap-2">
+                <Hammer className="w-5 h-5 text-[#E6B85C]" />
+                <span>طاولة الصياغة والحرفيات — موارد إيثيريا</span>
+              </h2>
+              <p className="text-xs text-[#94A3B8] mt-1">
+                حوّل الأعشاب والخام والبلورات التي جمعتها من القارة إلى أحجار صقل وأدوات تكتيكية قوية.
+              </p>
+            </div>
+            <div className="flex flex-wrap items-center gap-3 text-xs font-mono-num">
+              <span className="px-3 py-1.5 rounded-lg bg-[#0D1422] border border-white/10 text-[#22C55E]">
+                أعشاب: {profile.gatheredResources.herb || 0}
+              </span>
+              <span className="px-3 py-1.5 rounded-lg bg-[#0D1422] border border-white/10 text-[#F59E0B]">
+                خام: {profile.gatheredResources.ore || 0}
+              </span>
+              <span className="px-3 py-1.5 rounded-lg bg-[#0D1422] border border-white/10 text-[#38BDF8]">
+                بلورات: {profile.gatheredResources.crystal || 0}
+              </span>
+              <span className="px-3 py-1.5 rounded-lg bg-[#0D1422] border border-[#FDE047]/30 text-[#FDE047]">
+                أحجار صقل: {profile.sharpeningStones || 0}
+              </span>
+            </div>
+          </section>
+
+          <section className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            {CRAFTING_RECIPES.map((rec) => {
+              const resNames: Record<OverworldNodeKind, string> = {
+                herb: 'أعشاب القمر',
+                ore: 'خام أوريكالكوم',
+                crystal: 'بلورات الأثير',
+              };
+              const canAfford =
+                profile.gold >= rec.costGold &&
+                Object.entries(rec.costResources).every(
+                  ([k, req]) => (profile.gatheredResources[k as OverworldNodeKind] || 0) >= (req || 0)
+                );
+
+              return (
+                <div
+                  key={rec.id}
+                  className="p-5 rounded-xl bg-[#121B2D]/90 border border-white/10 flex flex-col justify-between gap-4"
+                >
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between gap-2">
+                      <h3 className="font-display text-base font-bold text-[#F1F5F9]" style={{ color: rec.color }}>
+                        {rec.name}
+                      </h3>
+                      <span className="font-mono-num text-xs text-[#E6B85C]">{rec.costGold} ذهب</span>
+                    </div>
+                    <p className="text-xs text-[#CBD5E1] leading-relaxed">{rec.description}</p>
+                    <div className="flex flex-wrap gap-1.5 pt-1 text-[11px]">
+                      {Object.entries(rec.costResources).map(([k, req]) => {
+                        const kind = k as OverworldNodeKind;
+                        const owned = profile.gatheredResources[kind] || 0;
+                        const ok = owned >= (req || 0);
+                        return (
+                          <span
+                            key={k}
+                            className={`px-2 py-0.5 rounded font-mono-num border ${
+                              ok
+                                ? 'bg-[#102622] border-[#10B981]/35 text-[#6EE7B7]'
+                                : 'bg-[#24131A] border-[#EF4444]/35 text-[#FCA5A5]'
+                            }`}
+                          >
+                            {resNames[kind]}: {owned}/{req}
+                          </span>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  <button
+                    type="button"
+                    disabled={!canAfford || !onCraftRecipe}
+                    onClick={() => {
+                      if (onCraftRecipe) showNotice(onCraftRecipe(rec.id).message);
+                    }}
+                    className={`w-full py-2.5 px-4 text-xs font-bold rounded-lg transition-colors ${
+                      canAfford
+                        ? 'bg-[#E6B85C] hover:bg-[#F5D076] text-[#0A0F1A] cursor-pointer'
+                        : 'bg-[#172033] text-[#64748B] cursor-not-allowed'
+                    }`}
+                  >
+                    تصنيع الآن
+                  </button>
+                </div>
+              );
+            })}
           </section>
         </div>
       )}

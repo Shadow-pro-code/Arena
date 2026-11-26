@@ -22,6 +22,7 @@ import { getAchievementCurrentValue } from '../hooks/usePlayerProgress';
 import {
   ACHIEVEMENT_DEFS,
   ARENAS,
+  ELEMENT_META,
   MAP_CHALLENGES,
   MONSTER_LIST,
   NPC_JOB_LIST,
@@ -37,6 +38,7 @@ interface RewardsViewProps {
   onClaimChallenge: (challengeId: string) => boolean;
   onClaimDaily?: (dailyId: string) => boolean;
   onClaimAchievement?: (achId: string) => boolean;
+  onClaimCodexRegion?: (regionId: string) => { ok: boolean; message: string };
   onEquipTitle?: (title: string) => boolean;
   onOpenChest: (type: 'warrior' | 'mythic') => ChestRewardOutcome | null;
   onBuyChest: (type: 'warrior' | 'mythic') => boolean;
@@ -53,6 +55,7 @@ export const RewardsView: React.FC<RewardsViewProps> = ({
   onClaimChallenge,
   onClaimDaily,
   onClaimAchievement,
+  onClaimCodexRegion,
   onEquipTitle,
   onOpenChest,
   onBuyChest,
@@ -842,16 +845,87 @@ export const RewardsView: React.FC<RewardsViewProps> = ({
         </div>
       </section>
 
+      {/* 9-Region Continent Codex */}
+      <section className="isekai-panel rounded-2xl p-5 sm:p-6 space-y-4">
+        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/10 pb-3">
+          <div>
+            <h2 className="font-display text-xl font-bold text-[#F2F4F8] flex items-center gap-2">
+              <Compass className="w-5 h-5 text-[#38BDF8]" />
+              <span>موسوعة أقاليم قارة إيثيريا ({profile.discoveredRegions.length}/{OVERWORLD_MAP.regions?.length || 9})</span>
+            </h2>
+            <p className="text-xs text-[#94A3B8] mt-1">
+              اكتشف كل إقليم داخل العالم المفتوح لاستلام جائزة الاستكشاف (+150 ذهب · +12 وسام · صندوق محارب).
+            </p>
+          </div>
+          <span className="font-mono-num text-xs px-3 py-1 rounded-lg bg-[#0B1220] border border-[#38BDF8]/30 text-[#38BDF8]">
+            الكنوز المفتوحة: {profile.openedWorldChests.length}/{OVERWORLD_MAP.worldChests?.length || 12}
+          </span>
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+          {(OVERWORLD_MAP.regions || []).map((reg) => {
+            const discovered = profile.discoveredRegions.includes(reg.id);
+            const claimed = profile.claimedCodexRegions?.includes(reg.id) || false;
+            return (
+              <div
+                key={reg.id}
+                className={`p-3.5 rounded-xl border flex flex-col justify-between gap-2.5 ${
+                  claimed
+                    ? 'bg-[#0E1928] border-[#10B981]/35'
+                    : discovered
+                      ? 'bg-[#15223B] border-[#E6B85C]/55'
+                      : 'bg-[#0B111E] border-white/10 opacity-75'
+                }`}
+              >
+                <div className="space-y-1">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="font-display text-sm font-bold text-[#F8FAFC] flex items-center gap-1.5">
+                      <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: reg.color }} />
+                      <span>{reg.name}</span>
+                    </span>
+                    <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-[#0A0F1A] text-[#CBD5E1]">
+                      {claimed ? 'مكتمل' : discovered ? 'مكتشف' : 'مجهول'}
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-[#94A3B8] leading-snug">{reg.subtitle}</p>
+                </div>
+
+                {claimed ? (
+                  <div className="text-[11px] font-bold text-[#10B981] flex items-center gap-1 pt-1 border-t border-white/5">
+                    <CheckCircle2 className="w-3.5 h-3.5" /> تم استلام جائزة الإقليم
+                  </div>
+                ) : (
+                  <button
+                    type="button"
+                    disabled={!discovered || !onClaimCodexRegion}
+                    onClick={() => {
+                      if (onClaimCodexRegion) showNotice(onClaimCodexRegion(reg.id).message);
+                    }}
+                    className={`w-full py-1.5 px-3 rounded-lg text-xs font-bold transition-colors ${
+                      discovered
+                        ? 'bg-[#E6B85C] hover:bg-[#F5D076] text-[#0A0F1A] cursor-pointer'
+                        : 'bg-[#172033] text-[#64748B] cursor-not-allowed'
+                    }`}
+                  >
+                    {discovered ? 'استلام جائزة الإقليم' : 'استكشف الإقليم أولاً'}
+                  </button>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </section>
+
       {/* Monster Chain Bestiary (9 Monsters & Bosses) */}
       <section className="space-y-4">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
             <h2 className="font-display text-xl font-bold text-[#F2F4F8] flex items-center gap-2">
               <Skull className="w-5 h-5 text-[#F97316]" />
-              <span>سلسلة الوحوش والزعماء ({MONSTER_LIST.length} فئات)</span>
+              <span>سجل وسلسلة الوحوش والزعماء ({MONSTER_LIST.length} فئات)</span>
             </h2>
             <p className="text-xs text-[#8F9BAE] mt-0.5">
-              تظهر الوحوش تدريجياً حسب رقم الموجة في الساحات الواسعة بذكاء التفاف وإطلاق قذائف، وتُختتم بعملاق الهاوية في الموجة 6.
+              تتبع عدد مرات هزيمتك لكل وحش ورتبة الصيد الخاصة بك (مكتشف ← صائد ← قاهر ← سيد الوحوش).
             </p>
           </div>
         </div>
@@ -859,6 +933,29 @@ export const RewardsView: React.FC<RewardsViewProps> = ({
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
           {MONSTER_LIST.map((m) => {
             const slainCount = profile.monsterKillsByType[m.id] || 0;
+            const tierLabel =
+              slainCount >= 60
+                ? 'سيد الوحوش'
+                : slainCount >= 30
+                  ? 'قاهر'
+                  : slainCount >= 10
+                    ? 'صائد'
+                    : slainCount >= 1
+                      ? 'مكتشف'
+                      : 'غير مُصطاد';
+            const nextMilestone = slainCount < 1 ? 1 : slainCount < 10 ? 10 : slainCount < 30 ? 30 : 60;
+            const elemKey =
+              m.id === 'magma_boss' || m.id === 'ember_imp' || m.id === 'ash_stalker'
+                ? 'fire'
+                : m.id === 'frost_specter'
+                  ? 'frost'
+                  : m.id === 'void_colossus' || m.id === 'wraith_knight' || m.id === 'shadow_reaper'
+                    ? 'void'
+                    : m.id === 'venom_crawler'
+                      ? 'lightning'
+                      : 'earth';
+            const elMeta = ELEMENT_META[elemKey];
+
             return (
               <div
                 key={m.id}
@@ -871,13 +968,18 @@ export const RewardsView: React.FC<RewardsViewProps> = ({
                 <div className="space-y-1.5">
                   <div className="flex items-center justify-between gap-2">
                     <span className="text-xs font-bold" style={{ color: m.accentColor }}>
-                      المستوى {m.tier} · {m.roleLabel}
+                      فئة {m.tier} · {m.roleLabel}
                     </span>
-                    <span className="font-mono-num text-xs text-[#9AA6B8]">
-                      هزمتهم: <strong className="text-[#F2F4F8]">{slainCount}</strong>
+                    <span className="font-mono-num text-[11px] px-2 py-0.5 rounded bg-[#0A0F1A] text-[#E6B85C]">
+                      {tierLabel} ({slainCount}/{nextMilestone})
                     </span>
                   </div>
-                  <h3 className="font-display text-base font-bold text-[#F2F4F8]">{m.name}</h3>
+                  <div className="flex items-center justify-between gap-2">
+                    <h3 className="font-display text-base font-bold text-[#F2F4F8]">{m.name}</h3>
+                    <span className="text-[10px] font-bold" style={{ color: elMeta.color }}>
+                      {elMeta.label}
+                    </span>
+                  </div>
                   <p className="text-xs text-[#9AA6B8] leading-relaxed">{m.description}</p>
                 </div>
 

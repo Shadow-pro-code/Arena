@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import type {
   AppDestination,
   ArenaId,
+  ArenaModifierId,
   AvatarConfig,
   GameMode,
   MatchResult,
@@ -31,12 +32,24 @@ export function App() {
     unlockOrEquipWeapon,
     upgradeWeapon,
     unlockOrEquipPower,
+    swapCombatSkillSlot,
+    setActiveSkillDeck,
+    toggleActiveSkillDeck,
+    unlockOrEquipRune,
     unlockNextSkillSlot,
     upgradePower,
     unlockNetworkNode,
+    respecNetworkNodes,
     fusePowers,
+    synthesizeDynamicSkill,
+    renameCustomSkill,
     unlockOrEquipGear,
+    upgradeGear,
     unequipGearSlot,
+    craftRecipe,
+    saveLoadoutSlot,
+    applyLoadoutSlot,
+    claimCodexRegion,
     buyConsumable,
     consumeBattleItem,
     acceptNpcJob,
@@ -79,10 +92,17 @@ export function App() {
   const [destination, setDestination] = useState<AppDestination>('hub');
   const [selectedArena, setSelectedArena] = useState<ArenaId>(profile.favoriteArena);
   const [selectedMode, setSelectedMode] = useState<GameMode>('unified_clash');
+  const [activeArenaModifiers, setActiveArenaModifiers] = useState<ArenaModifierId[]>([]);
   const [activeRival, setActiveRival] = useState<RivalChampion>(RIVAL_CHAMPIONS[0]);
   const [localP2Avatar, setLocalP2Avatar] = useState<AvatarConfig>(RIVAL_CHAMPIONS[1].avatar);
   const [showStoryModal, setShowStoryModal] = useState(false);
   const [showHubCustomizer, setShowHubCustomizer] = useState(false);
+
+  const toggleArenaModifier = (id: ArenaModifierId) => {
+    setActiveArenaModifiers((prev) =>
+      prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]
+    );
+  };
 
   // Enter combat automatically once an online room is created/joined
   useEffect(() => {
@@ -126,7 +146,13 @@ export function App() {
 
   const handleCreateOnlineRoom = (roomName: string, arenaId: ArenaId) => {
     const lv = profile.weaponLevels[profile.avatar.weaponId] || 1;
-    const derived = computeFighterDerivedStats(profile.avatar, lv, profile.equippedGear);
+    const derived = computeFighterDerivedStats(
+      profile.avatar,
+      lv,
+      profile.equippedGear,
+      profile.gearLevels,
+      profile.unlockedNetworkNodes
+    );
     mp.createRoom({
       roomName,
       arenaId,
@@ -138,7 +164,13 @@ export function App() {
 
   const handleJoinOnlineRoom = (codeOrId: string) => {
     const lv = profile.weaponLevels[profile.avatar.weaponId] || 1;
-    const derived = computeFighterDerivedStats(profile.avatar, lv, profile.equippedGear);
+    const derived = computeFighterDerivedStats(
+      profile.avatar,
+      lv,
+      profile.equippedGear,
+      profile.gearLevels,
+      profile.unlockedNetworkNodes
+    );
     mp.joinRoom({
       codeOrId,
       avatar: profile.avatar,
@@ -206,9 +238,11 @@ export function App() {
           profile={profile}
           selectedArena={selectedArena}
           selectedMode={selectedMode}
+          selectedModifiers={activeArenaModifiers}
           onlinePlayers={mp.onlinePlayers}
           onSelectArena={handleSelectArena}
           onSelectMode={setSelectedMode}
+          onToggleModifier={toggleArenaModifier}
           onStartCombat={handleStartCombat}
           onNavigate={setDestination}
           onOpenStory={() => setShowStoryModal(true)}
@@ -229,10 +263,17 @@ export function App() {
           onEquipTitle={equipTitle}
           onAllocateStat={allocateStat}
           onUnlockOrEquipPower={unlockOrEquipPower}
+          onSetActiveSkillDeck={setActiveSkillDeck}
           onUnlockNextSkillSlot={unlockNextSkillSlot}
           onUpgradePower={upgradePower}
           onUnlockNetworkNode={unlockNetworkNode}
+          onRespecNetworkNodes={respecNetworkNodes}
+          onUnlockOrEquipRune={unlockOrEquipRune}
           onFusePowers={fusePowers}
+          onSynthesizeDynamicSkill={synthesizeDynamicSkill}
+          onRenameCustomSkill={renameCustomSkill}
+          onSaveLoadoutSlot={saveLoadoutSlot}
+          onApplyLoadoutSlot={applyLoadoutSlot}
           onStartCombat={() => handleStartCombat(selectedMode, selectedArena)}
         />
       )}
@@ -243,7 +284,9 @@ export function App() {
           onUnlockOrEquip={unlockOrEquipWeapon}
           onUpgradeWeapon={upgradeWeapon}
           onUnlockOrEquipGear={unlockOrEquipGear}
+          onUpgradeGear={upgradeGear}
           onUnequipGear={unequipGearSlot}
+          onCraftRecipe={craftRecipe}
           onBuyConsumable={buyConsumable}
           onBuyChest={buyChest}
         />
@@ -256,6 +299,7 @@ export function App() {
           onClaimChallenge={claimMapChallenge}
           onClaimDaily={claimDailyChallenge}
           onClaimAchievement={claimAchievement}
+          onClaimCodexRegion={claimCodexRegion}
           onEquipTitle={equipTitle}
           onOpenChest={openChest}
           onBuyChest={buyChest}
@@ -295,6 +339,7 @@ export function App() {
           profile={profile}
           mode={selectedMode}
           arenaId={selectedArena}
+          activeModifiers={activeArenaModifiers}
           rivalChampion={activeRival}
           localP2Avatar={localP2Avatar}
           onlineRoom={mp.activeRoom}
@@ -321,6 +366,9 @@ export function App() {
           onChangeCamera={setCameraView}
           onChangeDeviceMode={setDeviceMode}
           onToggleLandscape={setLandscapeLocked}
+          onSwapCombatSkillSlot={swapCombatSkillSlot}
+          onSetActiveSkillDeck={setActiveSkillDeck}
+          onToggleCombatDeck={toggleActiveSkillDeck}
           onConsumeItem={consumeBattleItem}
           onDiscoverRegion={(regionId, _name, gold, xp) =>
             recordRegionDiscovery(regionId, gold, xp)

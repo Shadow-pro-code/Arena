@@ -50,6 +50,9 @@ export interface RenderFighter {
   shieldActive: boolean;
   overdriveActive: boolean;
   frozenTimer: number;
+  burningTimer?: number;
+  shockedTimer?: number;
+  parryFlash?: number;
   team: 'player1' | 'player2' | 'enemy';
   weaponLevel?: number;
   bankAngle?: number;
@@ -74,6 +77,9 @@ export interface RenderMonster {
   telegraphRadius: number;
   hitFlash: number;
   frozenTimer: number;
+  burningTimer?: number;
+  shockedTimer?: number;
+  enraged?: boolean;
   isBoss: boolean;
 }
 
@@ -189,6 +195,7 @@ export interface RenderScenePayload {
   completedWorldEventIds?: string[];
   activeEventZoneId?: string;
   showFloatingDamage?: boolean;
+  lockedTargetPos?: { x: number; y: number; z: number; radius: number } | null;
 }
 
 interface PolyOpts {
@@ -2459,6 +2466,20 @@ export class SoftwareRenderer3D {
           filled: true,
         });
       }
+    }
+    if (scene.lockedTargetPos) {
+      const lp = scene.lockedTargetPos;
+      this.drawGroundRing(ctx, {
+        x: lp.x,
+        y: lp.y + 0.06,
+        z: lp.z,
+        radius: lp.radius + Math.sin(scene.time * 6) * 0.14,
+        maxRadius: lp.radius + 0.25,
+        color: '#38BDF8',
+        alpha: 0.92,
+        isFusion: true,
+        secondaryColor: '#FDE047',
+      });
     }
     const shrineCullSq = 48 * 48;
     for (const sh of scene.arena.shrines) {

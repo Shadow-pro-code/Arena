@@ -1,18 +1,24 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
+  ArrowLeftRight,
   ArrowUp,
+  Bell,
+  Brain,
   Briefcase,
   Camera,
   CheckCircle2,
+  Clock,
   Coins,
   Compass,
   Cpu,
+  Crosshair,
   Eye,
   EyeOff,
   Flame,
   Gem,
   Gift,
   Heart,
+  Layers,
   Lock,
   LogOut,
   Map as MapIcon,
@@ -38,6 +44,7 @@ import {
 } from 'lucide-react';
 import type {
   ArenaId,
+  ArenaModifierId,
   AvatarConfig,
   CameraViewMode,
   ChatMessage,
@@ -53,6 +60,7 @@ import type {
   OnlineRoomSummary,
   OverworldNodeKind,
   PlayerProfile,
+  PowerId,
   RenderEngineMode,
   ResolvedRenderEngine,
   RivalChampion,
@@ -63,12 +71,17 @@ import type {
 } from '../types/game';
 import {
   ARENAS,
+  ARENA_MODIFIERS,
+  CONSUMABLES,
   NPC_JOB_LIST,
   OVERWORLD_MAP,
-  POWERS,
+  RANK_META,
   SECRET_WORLD_BOSSES,
   WEAPONS,
   WORLD_EVENT_ZONES,
+  checkPowerRequirements,
+  getPowerRank,
+  resolvePowerDef,
 } from '../data/gameCatalog';
 import { SoftwareRenderer3D } from '../engine/renderer3d';
 import { WebGLRenderer3D } from '../engine/webglRenderer3d';
@@ -89,6 +102,7 @@ interface ArenaCombatViewProps {
   profile: PlayerProfile;
   mode: GameMode;
   arenaId: ArenaId;
+  activeModifiers?: ArenaModifierId[];
   rivalChampion?: RivalChampion;
   localP2Avatar?: AvatarConfig;
   onlineRoom?: OnlineRoomSummary | null;
@@ -130,6 +144,9 @@ interface ArenaCombatViewProps {
   onChangeCamera: (c: CameraViewMode) => void;
   onChangeDeviceMode: (d: DeviceMode) => void;
   onToggleLandscape?: (locked: boolean) => void;
+  onSwapCombatSkillSlot?: (slotIdx: 0 | 1 | 2 | 3, powerId: PowerId, deckIdx?: 0 | 1) => boolean;
+  onSetActiveSkillDeck?: (deckIdx: 0 | 1) => void;
+  onToggleCombatDeck?: () => 0 | 1;
   onConsumeItem?: (id: ConsumableId) => boolean;
   onDiscoverRegion?: (regionId: string, name: string, gold: number, xp: number) => void;
   onOpenWorldChest?: (chest: WorldChestDef) => void;
@@ -185,6 +202,7 @@ export const ArenaCombatView: React.FC<ArenaCombatViewProps> = ({
   profile,
   mode,
   arenaId,
+  activeModifiers = [],
   rivalChampion,
   localP2Avatar,
   onlineRoom,
@@ -211,6 +229,9 @@ export const ArenaCombatView: React.FC<ArenaCombatViewProps> = ({
   onChangeCamera,
   onChangeDeviceMode,
   onToggleLandscape,
+  onSwapCombatSkillSlot,
+  onSetActiveSkillDeck,
+  onToggleCombatDeck,
   onConsumeItem,
   onDiscoverRegion,
   onOpenWorldChest,
@@ -279,6 +300,9 @@ export const ArenaCombatView: React.FC<ArenaCombatViewProps> = ({
   const [showChatDrawer, setShowChatDrawer] = useState(false);
   const [showCustomizer, setShowCustomizer] = useState(false);
   const [showUtilityDrawer, setShowUtilityDrawer] = useState(false);
+  const [showQuickSwap, setShowQuickSwap] = useState(false);
+  const [quickSwapSlot, setQuickSwapSlot] = useState<0 | 1 | 2 | 3>(0);
+  const [quickSwapDeck, setQuickSwapDeck] = useState<0 | 1>(profile.avatar.activeDeckIndex === 1 ? 1 : 0);
   const [activeNpcId, setActiveNpcId] = useState<string | null>(null);
   const [npcNotice, setNpcNotice] = useState('');
 
@@ -292,6 +316,26 @@ export const ArenaCombatView: React.FC<ArenaCombatViewProps> = ({
   showCustomizerRef.current = showCustomizer;
   const showUtilityDrawerRef = useRef(showUtilityDrawer);
   showUtilityDrawerRef.current = showUtilityDrawer;
+  const showQuickSwapRef = useRef(showQuickSwap);
+  showQuickSwapRef.current = showQuickSwap;
+  const quickSwapOpenedAtRef = useRef(0);
+  const [quickSwapNotice, setQuickSwapNotice] = useState<{ text: string; kind: 'ok' | 'warn' } | null>(null);
+  const [recentNotices, setRecentNotices] = useState<string[]>([]);
+  const lastBannerRef = useRef<string>('');
+
+  const openQuickSwap = () => {
+    quickSwapOpenedAtRef.current = performance.now();
+    setQuickSwapNotice(null);
+    setQuickSwapDeck(simRef.current ? simRef.current.getHudSnapshot().activeDeckIndex : (profile.avatar.activeDeckIndex === 1 ? 1 : 0));
+    setShowWorldMap(false);
+    setShowChatDrawer(false);
+    setShowQuickSwap(true);
+  };
+
+  const closeQuickSwap = () => {
+    if (performance.now() - quickSwapOpenedAtRef.current < 260) return;
+    setShowQuickSwap(false);
+  };
 
   const [landscapeMode, setLandscapeMode] = useState<boolean>(profile.landscapeLocked);
   const adaptive = useAdaptiveUI({
@@ -309,32 +353,55 @@ export const ArenaCombatView: React.FC<ArenaCombatViewProps> = ({
 
   const displayMap = mode === 'world_explore' ? OVERWORLD_MAP : ARENAS[arenaId];
   const weapon = WEAPONS[profile.avatar.weaponId];
-  const slotPowers = profile.avatar.powerSlots.map((pid) => POWERS[pid] || POWERS.inferno_nova);
+  const initialSlotPowers = profile.avatar.powerSlots.map((pid) =>
+    resolvePowerDef(pid, profile.customSkills)
+  );
 
   const [hud, setHud] = useState<HudSnapshot>({
     hp: 200,
     maxHp: 200,
     energy: 100,
     maxEnergy: 100,
+    mana: 110,
+    maxMana: 110,
+    stamina: 110,
+    maxStamina: 110,
+    staminaExhausted: false,
     wave: 1,
     kills: 0,
     combo: 0,
     comboTimer: 0,
+    parryCount: 0,
     heavyCd: 0,
     heavyMaxCd: 4.2,
     powerCd: 0,
-    powerMaxCd: slotPowers[0].cooldown,
+    powerMaxCd: initialSlotPowers[0].cooldown,
     secondaryCd: 0,
-    secondaryMaxCd: slotPowers[1].cooldown,
+    secondaryMaxCd: initialSlotPowers[1].cooldown,
     slotCooldowns: [0, 0, 0, 0],
     slotMaxCooldowns: [
-      slotPowers[0].cooldown,
-      slotPowers[1].cooldown,
-      slotPowers[2].cooldown,
-      slotPowers[3].cooldown,
+      initialSlotPowers[0].cooldown,
+      initialSlotPowers[1].cooldown,
+      initialSlotPowers[2].cooldown,
+      initialSlotPowers[3].cooldown,
     ],
+    slotPowers:
+      profile.avatar.activeDeckIndex === 1 && profile.avatar.secondaryPowerSlots
+        ? profile.avatar.secondaryPowerSlots
+        : profile.avatar.powerSlots,
+    primarySlotPowers: profile.avatar.powerSlots,
+    secondarySlotPowers: profile.avatar.secondaryPowerSlots || profile.avatar.powerSlots,
+    activeDeckIndex: profile.avatar.activeDeckIndex === 1 ? 1 : 0,
+    timeScale: 1,
+    swapCharges: 3,
+    maxSwapCharges: 3,
+    swapRechargeSec: 0,
+    swapBlockedReason: null,
+    mindOverclockSec: 0,
+    mindOverclockUsesLeft: 2,
     dodgeCd: 0,
     sprintActive: false,
+    activeModifiers,
     playerX: 0,
     playerZ: 6,
     scoreP1: 0,
@@ -354,6 +421,10 @@ export const ArenaCombatView: React.FC<ArenaCombatViewProps> = ({
       elixir_heal: profile.consumables.elixir_heal || 0,
       scroll_energy: profile.consumables.scroll_energy || 0,
       tonic_fury: profile.consumables.tonic_fury || 0,
+      stun_bomb: profile.consumables.stun_bomb || 0,
+      healing_ward: profile.consumables.healing_ward || 0,
+      loot_elixir: profile.consumables.loot_elixir || 0,
+      treasure_compass: profile.consumables.treasure_compass || 0,
     },
     isOverworld: mode === 'world_explore',
     currentRegionName: mode === 'world_explore' ? 'قرية الملاذ الآمنة' : undefined,
@@ -372,22 +443,46 @@ export const ArenaCombatView: React.FC<ArenaCombatViewProps> = ({
     currentBiomeColor: '#22C55E',
   });
 
+  const activePowerSlots = hud.slotPowers || profile.avatar.powerSlots;
+  const slotPowers = activePowerSlots.map((pid) => resolvePowerDef(pid, profile.customSkills));
+
   const isMobile = profile.deviceMode === 'mobile';
   const showTouchControls = adaptive.showTouchControls;
-  const anyOverlayOpen =
-    paused || showWorldMap || showChatDrawer || showCustomizer || Boolean(activeNpcId) || Boolean(matchResult);
+  const hardPaused =
+    paused ||
+    showWorldMap ||
+    showChatDrawer ||
+    showCustomizer ||
+    Boolean(activeNpcId) ||
+    Boolean(matchResult);
+  const anyOverlayOpen = hardPaused || showQuickSwap;
   const anyOverlayOpenRef = useRef(anyOverlayOpen);
   anyOverlayOpenRef.current = anyOverlayOpen;
+  const hardPausedRef = useRef(hardPaused);
+  hardPausedRef.current = hardPaused;
 
-  // Pause simulation automatically when modal overlays are active
+  // Hard-pause for menus, OR Deep Tactical Bullet-Time Slow-Motion (4%) for Quick Skill Swapper
   useEffect(() => {
     if (simRef.current) {
-      simRef.current.paused = anyOverlayOpen;
+      simRef.current.paused = hardPaused;
+      if (showQuickSwap && !hardPaused) {
+        simRef.current.timeScale = mode === 'pvp_online' ? 1 : 0.04;
+      } else {
+        simRef.current.timeScale = 1;
+      }
     }
     if (anyOverlayOpen) {
       setShowUtilityDrawer(false);
     }
-  }, [anyOverlayOpen]);
+  }, [anyOverlayOpen, hardPaused, showQuickSwap, mode]);
+
+  // Track rolling notifications feed from combat banners and announcements
+  useEffect(() => {
+    const incoming = koAnnouncement || hud.bannerText;
+    if (!incoming || incoming === lastBannerRef.current) return;
+    lastBannerRef.current = incoming;
+    setRecentNotices((prev) => [incoming, ...prev.filter((n) => n !== incoming)].slice(0, 3));
+  }, [hud.bannerText, koAnnouncement]);
 
   // Clean up fullscreen/orientation lock on unmount
   useEffect(() => {
@@ -503,9 +598,14 @@ export const ArenaCombatView: React.FC<ArenaCombatViewProps> = ({
       playerAvatar: profile.avatar,
       playerWeaponLevel: profile.weaponLevels[profile.avatar.weaponId] || 1,
       equippedGear: profile.equippedGear,
+      gearLevels: profile.gearLevels,
       unlockedSkillSlots: profile.unlockedSkillSlots,
       powerLevels: profile.powerLevels,
+      customSkills: profile.customSkills,
+      equippedRunes: profile.equippedRunes,
       unlockedNetworkNodes: profile.unlockedNetworkNodes,
+      activeModifiers,
+      autoDrinkHeal: hudConfig.autoDrinkHeal ?? true,
       initialExploredChunks: profile.exploredChunks,
       onExploreChunk,
       consumables: profile.consumables,
@@ -521,6 +621,13 @@ export const ArenaCombatView: React.FC<ArenaCombatViewProps> = ({
       onCompleteWorldEvent,
       onCritLanded,
       onFusionCast,
+      onOpenQuickSwap: () => openQuickSwap(),
+      onToggleCombatDeck: (nextDeck) => {
+        onSetActiveSkillDeck?.(nextDeck);
+        if (simRef.current) {
+          setHud(simRef.current.getHudSnapshot());
+        }
+      },
       onOpenNpcWork: (npcId) => {
         setNpcNotice('');
         setActiveNpcId(npcId);
@@ -548,6 +655,7 @@ export const ArenaCombatView: React.FC<ArenaCombatViewProps> = ({
     setPaused(false);
     setShowWorldMap(false);
     setShowChatDrawer(false);
+    setShowQuickSwap(false);
     setActiveNpcId(null);
 
     if (mode === 'pvp_online' && onBindOnlineListeners) {
@@ -616,7 +724,12 @@ export const ArenaCombatView: React.FC<ArenaCombatViewProps> = ({
       if (['Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', kb.jump].includes(e.code)) {
         e.preventDefault();
       }
+      if (e.repeat) return;
       if (e.code === 'Escape') {
+        if (showQuickSwapRef.current) {
+          setShowQuickSwap(false);
+          return;
+        }
         if (showUtilityDrawerRef.current) {
           setShowUtilityDrawer(false);
           return;
@@ -646,13 +759,22 @@ export const ArenaCombatView: React.FC<ArenaCombatViewProps> = ({
         onChangeHudConfig?.({ ...hudConfigRef.current, zenMode: !hudConfigRef.current.zenMode });
         return;
       }
+      if (e.code === kb.quickSwap && mode !== 'pvp_local') {
+        if (showQuickSwapRef.current) {
+          setShowQuickSwap(false);
+        } else {
+          openQuickSwap();
+        }
+        return;
+      }
       if (e.code === kb.map && mode === 'world_explore') {
         setActiveNpcId(null);
         setShowChatDrawer(false);
+        setShowQuickSwap(false);
         setShowWorldMap((prev) => !prev);
         return;
       }
-      if (showWorldMapRef.current || activeNpcIdRef.current || showChatDrawerRef.current) return;
+      if (showWorldMapRef.current || showQuickSwapRef.current || activeNpcIdRef.current || showChatDrawerRef.current) return;
 
       if (e.code === kb.camera) {
         const idx = CAMERA_CYCLE.indexOf(sim.cameraView);
@@ -698,7 +820,7 @@ export const ArenaCombatView: React.FC<ArenaCombatViewProps> = ({
       }
 
       hudTimer += dt;
-      if (hudTimer >= 0.08 && !anyOverlayOpenRef.current) {
+      if (hudTimer >= 0.08 && !hardPausedRef.current) {
         hudTimer = 0;
         setHud(sim.getHudSnapshot());
       }
@@ -887,7 +1009,17 @@ export const ArenaCombatView: React.FC<ArenaCombatViewProps> = ({
   };
 
   const hpPct = Math.max(0, Math.min(100, Math.round((hud.hp / Math.max(1, hud.maxHp)) * 100)));
-  const energyPct = Math.max(0, Math.min(100, Math.round((hud.energy / Math.max(1, hud.maxEnergy)) * 100)));
+  const manaPct = Math.max(0, Math.min(100, Math.round((hud.mana / Math.max(1, hud.maxMana)) * 100)));
+  const staminaPct = Math.max(0, Math.min(100, Math.round((hud.stamina / Math.max(1, hud.maxStamina)) * 100)));
+  const gadgetCount =
+    (hud.consumables.stun_bomb || 0) +
+    (hud.consumables.healing_ward || 0) +
+    (hud.consumables.treasure_compass || 0);
+  const triggerNextGadget = () => {
+    if ((hud.consumables.stun_bomb || 0) > 0) simRef.current?.triggerConsumable('stun_bomb');
+    else if ((hud.consumables.healing_ward || 0) > 0) simRef.current?.triggerConsumable('healing_ward');
+    else if ((hud.consumables.treasure_compass || 0) > 0) simRef.current?.triggerConsumable('treasure_compass');
+  };
 
   // Minimap viewport: zoomed local radar in 1400m Overworld, full arena view in battle arenas
   const radarViewBox = hud.isOverworld
@@ -1027,15 +1159,38 @@ export const ArenaCombatView: React.FC<ArenaCombatViewProps> = ({
             </div>
 
             <div className="flex items-center justify-between text-[9px] sm:text-[10px] text-[#94A3B8] gap-1">
-              <span className="truncate">{slotPowers[0].name}</span>
-              <span className="font-mono-num text-[#38BDF8] shrink-0">{energyPct}%</span>
+              <span className="truncate">مانا · {slotPowers[0].name}</span>
+              <span className="font-mono-num text-[#38BDF8] shrink-0">
+                {hud.mana}/{hud.maxMana}
+              </span>
             </div>
             <div className="w-full h-1 bg-[#162034] rounded-full overflow-hidden">
-              <div className="h-full bg-[#38BDF8] transition-all duration-100" style={{ width: `${energyPct}%` }} />
+              <div className="h-full bg-[#38BDF8] transition-all duration-100" style={{ width: `${manaPct}%` }} />
             </div>
 
-            {(hud.combo >= 2 || hud.terrainNote || hud.sprintActive) && (
-              <div className="flex items-center justify-between gap-2 text-[9px] sm:text-[10px] pt-0.5">
+            <div className="flex items-center justify-between text-[9px] sm:text-[10px] text-[#94A3B8] gap-1">
+              <span className={hud.staminaExhausted ? 'text-[#EF4444] font-bold' : ''}>
+                {hud.staminaExhausted ? 'إرهاق ستامينا!' : 'ستامينا'}
+              </span>
+              <span
+                className={`font-mono-num shrink-0 ${
+                  hud.staminaExhausted ? 'text-[#EF4444]' : 'text-[#F59E0B]'
+                }`}
+              >
+                {hud.stamina}/{hud.maxStamina}
+              </span>
+            </div>
+            <div className="w-full h-1 bg-[#162034] rounded-full overflow-hidden">
+              <div
+                className={`h-full transition-all duration-100 ${
+                  hud.staminaExhausted ? 'bg-[#EF4444]' : 'bg-gradient-to-r from-[#D97706] to-[#FBBF24]'
+                }`}
+                style={{ width: `${staminaPct}%` }}
+              />
+            </div>
+
+            {(hud.combo >= 2 || hud.parryCount > 0 || hud.terrainNote || hud.sprintActive) && (
+              <div className="flex flex-wrap items-center justify-between gap-1.5 text-[9px] sm:text-[10px] pt-0.5">
                 {hud.combo >= 2 ? (
                   <span className="text-[#E6B85C] font-display font-extrabold">
                     كومبو {hud.combo}x
@@ -1044,6 +1199,11 @@ export const ArenaCombatView: React.FC<ArenaCombatViewProps> = ({
                   <span className="text-[#38BDF8] font-bold">ركض سريع</span>
                 ) : (
                   <span />
+                )}
+                {hud.parryCount > 0 && (
+                  <span className="text-[#FDE047] font-mono-num font-bold">
+                    صدّ مثالي ×{hud.parryCount}
+                  </span>
                 )}
                 {hud.terrainNote && (
                   <span className="text-[#7DD3FC] font-medium truncate">{hud.terrainNote}</span>
@@ -1290,6 +1450,39 @@ export const ArenaCombatView: React.FC<ArenaCombatViewProps> = ({
           </div>
           )}
 
+          {hud.lockedTargetName && (
+            <div className="bg-[#0B101D]/94 border border-[#F59E0B]/55 rounded-lg px-2.5 py-0.5 flex items-center gap-2 text-[10px] sm:text-[11px] max-w-full">
+              <Crosshair className="w-3 h-3 text-[#F59E0B] shrink-0" />
+              <span className="font-bold text-[#FEF3C7] truncate max-w-[120px]">{hud.lockedTargetName}</span>
+              {hud.lockedTargetHpRatio !== undefined && (
+                <div className="w-14 h-1.5 bg-[#231917] rounded overflow-hidden shrink-0">
+                  <div
+                    className="h-full bg-[#F59E0B]"
+                    style={{ width: `${Math.round(hud.lockedTargetHpRatio * 100)}%` }}
+                  />
+                </div>
+              )}
+            </div>
+          )}
+
+          {hud.activeModifiers && hud.activeModifiers.length > 0 && !hud.isOverworld && (
+            <div className="flex flex-wrap items-center justify-center gap-1 max-w-full">
+              {hud.activeModifiers.map((mId) => {
+                const mDef = ARENA_MODIFIERS.find((m) => m.id === mId);
+                if (!mDef) return null;
+                return (
+                  <span
+                    key={mId}
+                    className="px-1.5 py-0.5 rounded bg-[#0B101D]/92 border text-[9px] font-bold whitespace-nowrap"
+                    style={{ borderColor: mDef.color, color: mDef.color }}
+                  >
+                    {mDef.name}
+                  </span>
+                );
+              })}
+            </div>
+          )}
+
           {hudConfig.widgets.mission && hud.activeMission && !hud.isOverworld && (
             <div className="bg-[#0B101D]/92 border border-[#38BDF8]/30 rounded-lg px-2 py-0.5 flex items-center justify-between gap-2 text-[10px] sm:text-[11px] max-w-full">
               <span className="flex items-center gap-1 text-[#E0F2FE] truncate">
@@ -1311,6 +1504,18 @@ export const ArenaCombatView: React.FC<ArenaCombatViewProps> = ({
                   {hud.activeEventProgress}
                 </span>
               )}
+            </div>
+          )}
+
+          {hud.mindOverclockSec > 0 && (
+            <div className="bg-[#0B1D2C]/94 border border-[#22D3EE]/60 rounded-lg px-2.5 py-0.5 flex items-center gap-1.5 text-[10px] sm:text-[11px] max-w-full">
+              <Brain className="w-3.5 h-3.5 text-[#22D3EE] shrink-0" />
+              <span className="font-bold text-[#CFFAFE] truncate">
+                تسريع التفكير الذهني: العالم 0.32x · سرعتك 1.25x
+              </span>
+              <span className="font-mono-num font-extrabold text-[#22D3EE] shrink-0">
+                {hud.mindOverclockSec}ث
+              </span>
             </div>
           )}
 
@@ -1680,11 +1885,11 @@ export const ArenaCombatView: React.FC<ArenaCombatViewProps> = ({
         </div>
       )}
 
-      {/* Overworld Proximity Interact Prompt (Chests / Nodes / Peaceful NPCs / Portals) */}
-      {hud.nearbyInteractable && !anyOverlayOpen && (
+      {/* Overworld Proximity Interact Prompt (Touch button on mobile, keyboard hint on Desktop) */}
+      {hud.nearbyInteractable && !anyOverlayOpen && showTouchControls && (
         <div
           className={`pointer-events-none absolute inset-x-0 z-20 flex justify-center px-4 ${
-            isCompactLandscape ? 'bottom-2.5' : showTouchControls ? 'bottom-44' : 'bottom-20'
+            isCompactLandscape ? 'bottom-2.5' : 'bottom-44'
           }`}
         >
           <button
@@ -1706,11 +1911,6 @@ export const ArenaCombatView: React.FC<ArenaCombatViewProps> = ({
                 </div>
               )}
             </div>
-            {!showTouchControls && (
-              <span className="font-mono-num text-xs font-extrabold bg-[#0A0F1A]/15 px-2 py-0.5 rounded">
-                [G]
-              </span>
-            )}
           </button>
         </div>
       )}
@@ -1758,7 +1958,7 @@ export const ArenaCombatView: React.FC<ArenaCombatViewProps> = ({
                   e.stopPropagation();
                   simRef.current?.triggerConsumable('scroll_energy');
                 }}
-                aria-label="لفيفة الطاقة"
+                aria-label="لفيفة الستامينا والمانا"
                 className="min-w-[34px] min-h-[34px] px-1 rounded-xl bg-[#0B101D]/92 border border-[#38BDF8]/50 disabled:opacity-35 text-[#38BDF8] flex flex-col items-center justify-center text-[9px] font-bold"
               >
                 <Sparkles className="w-3.5 h-3.5" />
@@ -1779,6 +1979,35 @@ export const ArenaCombatView: React.FC<ArenaCombatViewProps> = ({
               </button>
               <button
                 type="button"
+                disabled={gadgetCount <= 0}
+                onPointerDown={(e) => {
+                  e.stopPropagation();
+                  triggerNextGadget();
+                }}
+                aria-label="أداة تكتيكية"
+                className="min-w-[34px] min-h-[34px] px-1 rounded-xl bg-[#0B101D]/92 border border-[#A78BFA]/50 disabled:opacity-35 text-[#C4B5FD] flex flex-col items-center justify-center text-[9px] font-bold"
+              >
+                <Zap className="w-3.5 h-3.5" />
+                <span className="font-mono-num">{gadgetCount}</span>
+              </button>
+              <button
+                type="button"
+                onPointerDown={(e) => {
+                  e.stopPropagation();
+                  simRef.current?.triggerPlayer1Action('lock_on');
+                }}
+                aria-label="تثبيت الهدف"
+                className={`min-w-[34px] min-h-[34px] px-1.5 rounded-xl border flex flex-col items-center justify-center text-[9px] font-bold ${
+                  hud.lockedTargetName
+                    ? 'bg-[#F59E0B] text-[#0A0F1A] border-[#FDE68A]'
+                    : 'bg-[#0B101D]/92 text-[#F59E0B] border-[#F59E0B]/40'
+                }`}
+              >
+                <Crosshair className="w-3.5 h-3.5" />
+                <span>تثبيت</span>
+              </button>
+              <button
+                type="button"
                 onPointerDown={(e) => {
                   e.stopPropagation();
                   simRef.current?.triggerPlayer1Action('sprint');
@@ -1795,7 +2024,8 @@ export const ArenaCombatView: React.FC<ArenaCombatViewProps> = ({
               {hud.isOverworld && isCompactLandscape && (
                 <button
                   type="button"
-                  onPointerDown={(e) => {
+                  onPointerDown={(e) => e.stopPropagation()}
+                  onClick={(e) => {
                     e.stopPropagation();
                     setShowWorldMap(true);
                   }}
@@ -1843,7 +2073,7 @@ export const ArenaCombatView: React.FC<ArenaCombatViewProps> = ({
               hudConfig.mobilePreset === 'spread' ? 'gap-2' : 'gap-1.5'
             }`}
           >
-            {/* Row 1: 4 Labeled Skill Tiles */}
+            {/* Row 1: Quick Swap + 4 Labeled Skill Tiles */}
             <div
               className={
                 adaptive.touchDeckLayout === 'narrow_portrait'
@@ -1851,16 +2081,49 @@ export const ArenaCombatView: React.FC<ArenaCombatViewProps> = ({
                   : 'flex items-center gap-1'
               }
             >
+              {mode !== 'pvp_local' && (
+                <>
+                  <button
+                    type="button"
+                    onPointerDown={(e) => {
+                      e.stopPropagation();
+                      simRef.current?.toggleCombatDeck();
+                    }}
+                    style={{ minHeight: `${adaptive.skillTileHeightPx}px` }}
+                    className={`px-2 py-1 rounded-xl border flex flex-col items-center justify-center gap-0.5 active:scale-95 ${
+                      hud.activeDeckIndex === 1
+                        ? 'border-[#38BDF8] bg-[#102944]/95 text-[#38BDF8]'
+                        : 'border-[#E6B85C]/55 bg-[#231B0E]/95 text-[#E6B85C]'
+                    }`}
+                  >
+                    <Layers className="w-3.5 h-3.5" />
+                    <span className="text-[9px] font-bold">طقم {hud.activeDeckIndex + 1}</span>
+                  </button>
+                  <button
+                    type="button"
+                    onPointerDown={(e) => e.stopPropagation()}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      openQuickSwap();
+                    }}
+                    style={{ minHeight: `${adaptive.skillTileHeightPx}px` }}
+                    className="px-2 py-1 rounded-xl border border-[#E6B85C]/45 bg-[#121D34]/95 text-[#E6B85C] flex flex-col items-center justify-center gap-0.5 active:scale-95"
+                  >
+                    <ArrowLeftRight className="w-3.5 h-3.5" />
+                    <span className="text-[9px] font-bold">تبديل</span>
+                  </button>
+                </>
+              )}
               {slotPowers.map((sp, idx) => {
                 const locked = idx >= hud.unlockedSkillSlots;
                 const cd = hud.slotCooldowns[idx] || 0;
-                const lowEnergy = hud.energy < sp.energyCost;
+                const lowMana = hud.mana < sp.energyCost;
                 const actionKey = (`skill${idx}`) as 'skill0' | 'skill1' | 'skill2' | 'skill3';
                 return (
                   <button
                     key={`${sp.id}_${idx}`}
                     type="button"
-                    disabled={locked || cd > 0 || lowEnergy}
+                    disabled={locked || cd > 0 || lowMana}
                     onPointerDown={(e) => {
                       e.stopPropagation();
                       if (!locked) {
@@ -1884,8 +2147,8 @@ export const ArenaCombatView: React.FC<ArenaCombatViewProps> = ({
                       ) : (
                         <Sparkles className="w-3 h-3 shrink-0" style={{ color: SKILL_ACCENTS[idx] }} />
                       )}
-                      <span className={cd > 0 ? 'text-[#FBBF24] font-bold' : 'text-[#94A3B8]'}>
-                        {locked ? 'مقفلة' : cd > 0 ? `${cd}ث` : `${sp.energyCost}⚡`}
+                      <span className={cd > 0 ? 'text-[#FBBF24] font-bold' : 'text-[#38BDF8]'}>
+                        {locked ? 'مقفلة' : cd > 0 ? `${cd}ث` : `${sp.energyCost}💧`}
                       </span>
                     </div>
                     <span className="text-[9.5px] font-bold leading-tight truncate w-full text-center">
@@ -1982,7 +2245,7 @@ export const ArenaCombatView: React.FC<ArenaCombatViewProps> = ({
         </>
       )}
 
-      {/* DESKTOP MODE: Compact Bottom Interactive Action Bar with Jump & Dynamic Keybindings */}
+      {/* DESKTOP MODE: Pure Tactical Status, Active Skills, Potions & Notifications Strip (Zero Mobile/Touch Controls) */}
       {!showTouchControls && !anyOverlayOpen && !hudConfig.zenMode && (
         <div
           style={{
@@ -1991,167 +2254,183 @@ export const ArenaCombatView: React.FC<ArenaCombatViewProps> = ({
             transformOrigin: 'bottom center',
             bottom: useCssLandscapeRotation ? '0.5rem' : 'max(0.625rem, var(--safe-bottom))',
           }}
-          className="absolute inset-x-0 z-10 px-3 flex flex-col items-center gap-1.5 pointer-events-none"
+          className="absolute inset-x-0 z-10 px-4 flex flex-col items-center gap-1.5 pointer-events-none"
         >
-          <div className="pointer-events-auto max-w-[96vw] flex flex-wrap items-center justify-center gap-1.5 bg-[#0B101D]/94 border border-[#E6B85C]/30 rounded-xl p-1.5">
-            <button
-              type="button"
-              onClick={() => simRef.current?.triggerPlayer1Action('attack')}
-              className="px-3 py-1.5 rounded-lg bg-[#E6B85C] hover:bg-[#F5D076] text-[#0A0F1A] font-bold text-xs flex items-center gap-1 whitespace-nowrap shrink-0 cursor-pointer"
-            >
-              <Swords className="w-3.5 h-3.5" />
-              <span>هجوم</span>
-              <span className="font-mono-num text-[10px] opacity-80">[{formatKeyCodeLabel(keyBindings.attack)}]</span>
-            </button>
+          <div className="w-full max-w-6xl bg-[#090E1A]/90 border border-[#E6B85C]/30 rounded-2xl px-3 py-2 shadow-xl grid grid-cols-12 items-center gap-3">
+            {/* Right Zone (RTL Col 1-5): Active Deck + 4 Skill Status Readouts */}
+            <div className="col-span-5 flex items-center gap-1.5 min-w-0">
+              {mode !== 'pvp_local' && (
+                <div className="flex flex-col gap-1 shrink-0">
+                  <div
+                    className={`px-2 py-0.5 rounded-md border text-[10px] font-bold flex items-center justify-between gap-1.5 whitespace-nowrap ${
+                      hud.activeDeckIndex === 1
+                        ? 'bg-[#102944]/90 text-[#38BDF8] border-[#38BDF8]/50'
+                        : 'bg-[#231B0E]/90 text-[#E6B85C] border-[#E6B85C]/45'
+                    }`}
+                  >
+                    <span className="flex items-center gap-1">
+                      <Layers className="w-3 h-3" />
+                      طقم {hud.activeDeckIndex + 1}
+                    </span>
+                    <span className="font-mono-num opacity-80">[{formatKeyCodeLabel(keyBindings.swapDeck)}]</span>
+                  </div>
+                  <div
+                    className={`px-2 py-0.5 rounded-md border text-[10px] font-bold flex items-center justify-between gap-1.5 whitespace-nowrap ${
+                      hud.swapCharges > 0 && !hud.swapBlockedReason
+                        ? 'bg-[#111D33] text-[#CBD5E1] border-white/15'
+                        : 'bg-[#251318] text-[#FCA5A5] border-[#EF4444]/40'
+                    }`}
+                  >
+                    <span className="flex items-center gap-1">
+                      <ArrowLeftRight className="w-3 h-3 text-[#E6B85C]" />
+                      <span className="font-mono-num">
+                        {hud.swapCharges}/{hud.maxSwapCharges}
+                      </span>
+                    </span>
+                    <span className="font-mono-num opacity-80">[{formatKeyCodeLabel(keyBindings.quickSwap)}]</span>
+                  </div>
+                </div>
+              )}
 
-            <button
-              type="button"
-              onClick={() => simRef.current?.triggerPlayer1Action('jump')}
-              className="px-2.5 py-1.5 rounded-lg bg-[#0F2438] hover:bg-[#173552] text-cyan-200 font-semibold text-xs border border-cyan-400/40 flex items-center gap-1 whitespace-nowrap shrink-0 cursor-pointer"
-            >
-              <ArrowUp className="w-3.5 h-3.5 text-cyan-300" />
-              <span>قفز</span>
-              <span className="font-mono-num text-[10px] text-cyan-300/80">[{formatKeyCodeLabel(keyBindings.jump)}]</span>
-            </button>
+              <div className="grid grid-cols-4 gap-1.5 flex-1 min-w-0">
+                {slotPowers.map((sp, idx) => {
+                  const locked = idx >= hud.unlockedSkillSlots;
+                  const cd = hud.slotCooldowns[idx] || 0;
+                  const actionKey = (`skill${idx}`) as 'skill0' | 'skill1' | 'skill2' | 'skill3';
+                  const keyLabel = formatKeyCodeLabel(keyBindings[actionKey]);
+                  const lowMana = hud.mana < sp.energyCost;
+                  const overclockEmpty = sp.id === 'mind_overclock' && hud.mindOverclockUsesLeft <= 0;
+                  const ready = !locked && cd <= 0 && !lowMana && !overclockEmpty;
+                  return (
+                    <div
+                      key={`${sp.id}_desk_${idx}`}
+                      style={{ borderColor: locked ? 'rgba(100,116,139,0.3)' : `${SKILL_ACCENTS[idx]}50` }}
+                      className={`px-2 py-1 rounded-xl border min-w-0 flex flex-col justify-between ${
+                        locked
+                          ? 'bg-[#080C16]/80 opacity-50'
+                          : ready
+                            ? 'bg-[#10192D]/95'
+                            : 'bg-[#0C1322]/90 opacity-85'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between gap-1 text-[10px] font-mono-num">
+                        <span className="font-bold text-[#94A3B8]">[{keyLabel}]</span>
+                        {locked ? (
+                          <Lock className="w-3 h-3 text-[#64748B]" />
+                        ) : cd > 0 ? (
+                          <span className="text-[#FBBF24] font-bold">{cd}ث</span>
+                        ) : sp.id === 'mind_overclock' ? (
+                          <span className={overclockEmpty ? 'text-[#EF4444] font-bold' : 'text-[#22D3EE] font-bold'}>
+                            {hud.mindOverclockUsesLeft}/2
+                          </span>
+                        ) : (
+                          <span className={lowMana ? 'text-[#FCA5A5]' : 'text-[#38BDF8]'}>{sp.energyCost}م</span>
+                        )}
+                      </div>
+                      <div className="text-[11px] font-bold text-[#F1F5F9] truncate mt-0.5">
+                        {locked ? 'مقفلة' : sp.name}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
 
-            <button
-              type="button"
-              disabled={hud.heavyCd > 0}
-              onClick={() => simRef.current?.triggerPlayer1Action('heavy')}
-              className="px-2.5 py-1.5 rounded-lg bg-[#16223A] hover:bg-[#203050] disabled:opacity-50 text-[#F1F5F9] font-semibold text-xs border border-white/10 flex items-center gap-1 whitespace-nowrap shrink-0 cursor-pointer"
-            >
-              <Zap className="w-3.5 h-3.5 text-[#E6B85C]" />
-              <span className="max-w-[90px] truncate">
-                {hud.heavyCd > 0 ? `${hud.heavyCd}ث` : weapon.heavySkillName}
-              </span>
-              <span className="font-mono-num text-[10px] text-[#94A3B8]">[{formatKeyCodeLabel(keyBindings.heavy)}]</span>
-            </button>
-
-            {/* 4 Skill Slots (Gated to unlockedSkillSlots) */}
-            {slotPowers.map((sp, idx) => {
-              const locked = idx >= hud.unlockedSkillSlots;
-              const cd = hud.slotCooldowns[idx] || 0;
-              const actionKey = (`skill${idx}`) as 'skill0' | 'skill1' | 'skill2' | 'skill3';
-              const keyLabel = formatKeyCodeLabel(keyBindings[actionKey]);
-              return (
-                <button
-                  key={`${sp.id}_bar_${idx}`}
-                  type="button"
-                  disabled={locked || cd > 0 || hud.energy < sp.energyCost}
-                  onClick={() => {
-                    if (!locked) {
-                      simRef.current?.triggerPlayer1Action(actionKey);
-                    }
-                  }}
-                  title={locked ? `خانة مقفلة [${keyLabel}] — افتحها من ورشة المهارات` : sp.name}
-                  style={{ borderColor: locked ? 'rgba(100,116,139,0.4)' : `${SKILL_ACCENTS[idx]}55` }}
-                  className={`px-2.5 py-1.5 rounded-lg font-semibold text-xs border flex items-center gap-1 whitespace-nowrap shrink-0 ${
-                    locked
-                      ? 'bg-[#0B101B] text-[#64748B] opacity-55 cursor-not-allowed'
-                      : 'bg-[#141E36] hover:bg-[#1E2B4B] disabled:opacity-45 text-[#F1F5F9] cursor-pointer'
-                  }`}
-                >
-                  {locked ? (
-                    <Lock className="w-3.5 h-3.5 shrink-0 text-[#64748B]" />
-                  ) : (
-                    <Sparkles className="w-3.5 h-3.5 shrink-0" style={{ color: SKILL_ACCENTS[idx] }} />
+            {/* Center Zone (RTL Col 6-9): Notifications Feed & Active Combat States */}
+            <div className="col-span-4 px-2.5 py-1.5 rounded-xl bg-[#070B14]/90 border border-white/10 flex flex-col justify-center gap-1 min-w-0">
+              <div className="flex items-center justify-between gap-2 text-[10px]">
+                <span className="flex items-center gap-1 font-bold text-[#E6B85C] shrink-0">
+                  <Bell className="w-3 h-3" />
+                  <span>لوحة الإشعارات والحالات</span>
+                </span>
+                <div className="flex items-center gap-1 overflow-hidden">
+                  {hud.mindOverclockSec > 0 && (
+                    <span className="px-1.5 py-0.2 rounded bg-[#0E2B38] text-[#22D3EE] border border-[#22D3EE]/50 font-mono-num font-bold whitespace-nowrap">
+                      تسريع {hud.mindOverclockSec}ث
+                    </span>
                   )}
-                  <span className="max-w-[85px] truncate">
-                    {locked ? 'مقفلة' : cd > 0 ? `${cd}ث` : sp.name}
+                  {hud.staminaExhausted && (
+                    <span className="px-1.5 py-0.2 rounded bg-[#2D1218] text-[#FCA5A5] border border-[#EF4444]/40 font-bold whitespace-nowrap">
+                      إرهاق!
+                    </span>
+                  )}
+                  {hud.sprintActive && !hud.staminaExhausted && (
+                    <span className="px-1.5 py-0.2 rounded bg-[#0F2438] text-[#38BDF8] font-bold whitespace-nowrap">
+                      ركض
+                    </span>
+                  )}
+                  {hud.lockedTargetName && (
+                    <span className="px-1.5 py-0.2 rounded bg-[#291F0C] text-[#FBBF24] font-bold truncate max-w-[90px]">
+                      تثبيت: {hud.lockedTargetName}
+                    </span>
+                  )}
+                </div>
+              </div>
+
+              {hud.nearbyInteractable ? (
+                <div className="text-[11px] font-bold text-[#FDE68A] truncate flex items-center gap-1.5">
+                  <span className="px-1.5 py-0.2 rounded bg-[#E6B85C] text-[#0A0F1A] font-mono-num text-[10px] font-extrabold shrink-0">
+                    [{formatKeyCodeLabel(keyBindings.interact)}]
                   </span>
-                  <span className="font-mono-num text-[10px] text-[#94A3B8]">[{keyLabel}]</span>
-                </button>
-              );
-            })}
+                  <span className="truncate">{hud.nearbyInteractable.label}</span>
+                </div>
+              ) : (
+                <div className="text-[11px] text-[#CBD5E1] truncate">
+                  {koAnnouncement ||
+                    hud.bannerText ||
+                    recentNotices[0] ||
+                    (hud.activeMission
+                      ? `المهمة: ${hud.activeMission.title} (${hud.activeMission.progress}/${hud.activeMission.target})`
+                      : 'جاهز للمواجهة — اضغط B لتبديل المهارات أو N لتغيير الطقم')}
+                </div>
+              )}
+            </div>
 
-            <button
-              type="button"
-              disabled={hud.dodgeCd > 0}
-              onClick={() => simRef.current?.triggerPlayer1Action('dodge')}
-              className="px-2.5 py-1.5 rounded-lg bg-[#121B2D] hover:bg-[#1E2B45] disabled:opacity-50 text-[#F1F5F9] font-semibold text-xs border border-white/10 flex items-center gap-1 whitespace-nowrap shrink-0 cursor-pointer"
-            >
-              <Wind className="w-3.5 h-3.5 text-[#10B981]" />
-              <span>{hud.dodgeCd > 0 ? `${hud.dodgeCd}ث` : 'مراوغة'}</span>
-              <span className="font-mono-num text-[10px] text-[#94A3B8]">[{formatKeyCodeLabel(keyBindings.dodge)}]</span>
-            </button>
+            {/* Left Zone (RTL Col 10-12): Available Potions & Gadgets Readout */}
+            <div className="col-span-3 flex items-center justify-end gap-1.5 min-w-0">
+              <div className="flex items-center gap-1 px-2 py-1 rounded-xl bg-[#0D1A16] border border-[#10B981]/30 text-[11px]">
+                <Heart className="w-3.5 h-3.5 text-[#10B981] shrink-0" />
+                <span className="text-[#A7F3D0] font-semibold hidden xl:inline">شفاء</span>
+                <span className="font-mono-num font-bold text-[#10B981]">×{hud.consumables.elixir_heal}</span>
+                <span className="font-mono-num text-[9px] text-[#64748B]">[{formatKeyCodeLabel(keyBindings.potion1)}]</span>
+              </div>
 
-            <button
-              type="button"
-              onPointerDown={() => simRef.current?.triggerPlayer1Action('block_start')}
-              onPointerUp={() => simRef.current?.triggerPlayer1Action('block_end')}
-              onPointerLeave={() => simRef.current?.triggerPlayer1Action('block_end')}
-              className="px-2.5 py-1.5 rounded-lg bg-[#121B2D] hover:bg-[#1E2B45] text-[#F1F5F9] font-semibold text-xs border border-white/10 flex items-center gap-1 whitespace-nowrap shrink-0 cursor-pointer"
-            >
-              <Shield className="w-3.5 h-3.5 text-[#94A3B8]" />
-              <span>صدّ</span>
-              <span className="font-mono-num text-[10px] text-[#94A3B8]">[{formatKeyCodeLabel(keyBindings.block)}]</span>
-            </button>
+              <div className="flex items-center gap-1 px-2 py-1 rounded-xl bg-[#0D1924] border border-[#38BDF8]/30 text-[11px]">
+                <Sparkles className="w-3.5 h-3.5 text-[#38BDF8] shrink-0" />
+                <span className="text-[#BAE6FD] font-semibold hidden xl:inline">مانا</span>
+                <span className="font-mono-num font-bold text-[#38BDF8]">×{hud.consumables.scroll_energy}</span>
+                <span className="font-mono-num text-[9px] text-[#64748B]">[{formatKeyCodeLabel(keyBindings.potion2)}]</span>
+              </div>
 
-            <button
-              type="button"
-              onClick={() => simRef.current?.triggerPlayer1Action('sprint')}
-              className={`px-2.5 py-1.5 rounded-lg font-semibold text-xs border flex items-center gap-1 whitespace-nowrap shrink-0 cursor-pointer ${
-                hud.sprintActive
-                  ? 'bg-[#38BDF8] text-[#0A0F1A] border-[#BAE6FD]'
-                  : 'bg-[#121B2D] hover:bg-[#1E2B45] text-[#F1F5F9] border-white/10'
-              }`}
-            >
-              <Wind className="w-3.5 h-3.5" />
-              <span>ركض</span>
-              <span className="font-mono-num text-[10px] opacity-80">[{formatKeyCodeLabel(keyBindings.sprint)}]</span>
-            </button>
+              <div className="flex items-center gap-1 px-2 py-1 rounded-xl bg-[#21180D] border border-[#E6B85C]/30 text-[11px]">
+                <Flame className="w-3.5 h-3.5 text-[#E6B85C] shrink-0" />
+                <span className="text-[#FDE68A] font-semibold hidden xl:inline">غضب</span>
+                <span className="font-mono-num font-bold text-[#E6B85C]">×{hud.consumables.tonic_fury}</span>
+                <span className="font-mono-num text-[9px] text-[#64748B]">[{formatKeyCodeLabel(keyBindings.potion3)}]</span>
+              </div>
 
-            {hud.isOverworld && (
-              <button
-                type="button"
-                onClick={() => setShowWorldMap(true)}
-                className="px-2.5 py-1.5 rounded-lg bg-[#102036] hover:bg-[#183052] text-[#38BDF8] font-semibold text-xs border border-[#38BDF8]/35 flex items-center gap-1 whitespace-nowrap shrink-0 cursor-pointer"
-              >
-                <MapIcon className="w-3.5 h-3.5" />
-                <span>خريطة</span>
-                <span className="font-mono-num text-[10px]">[{formatKeyCodeLabel(keyBindings.map)}]</span>
-              </button>
-            )}
+              <div className="flex items-center gap-1 px-2 py-1 rounded-xl bg-[#19132B] border border-[#A78BFA]/30 text-[11px]">
+                <Zap className="w-3.5 h-3.5 text-[#C4B5FD] shrink-0" />
+                <span className="font-mono-num font-bold text-[#C4B5FD]">×{gadgetCount}</span>
+                <span className="font-mono-num text-[9px] text-[#64748B]">[{formatKeyCodeLabel(keyBindings.potion4)}]</span>
+              </div>
 
-            {/* Consumables Quick Belt */}
-            <div className="flex items-center gap-1 border-r border-white/10 pr-2 mr-1">
-              <button
-                type="button"
-                disabled={hud.consumables.elixir_heal <= 0}
-                onClick={() => simRef.current?.triggerConsumable('elixir_heal')}
-                title={`جرعة الشفاء الملكية [${formatKeyCodeLabel(keyBindings.potion1)}]`}
-                className="px-2 py-1.5 rounded bg-[#11241E] hover:bg-[#17332A] disabled:opacity-35 text-[#10B981] text-xs font-mono-num flex items-center gap-1 cursor-pointer"
-              >
-                <Heart className="w-3.5 h-3.5" />
-                <span>{hud.consumables.elixir_heal}</span>
-              </button>
-              <button
-                type="button"
-                disabled={hud.consumables.scroll_energy <= 0}
-                onClick={() => simRef.current?.triggerConsumable('scroll_energy')}
-                title={`لفيفة الطاقة [${formatKeyCodeLabel(keyBindings.potion2)}]`}
-                className="px-2 py-1.5 rounded bg-[#10202C] hover:bg-[#172E40] disabled:opacity-35 text-[#38BDF8] text-xs font-mono-num flex items-center gap-1 cursor-pointer"
-              >
-                <Sparkles className="w-3.5 h-3.5" />
-                <span>{hud.consumables.scroll_energy}</span>
-              </button>
-              <button
-                type="button"
-                disabled={hud.consumables.tonic_fury <= 0}
-                onClick={() => simRef.current?.triggerConsumable('tonic_fury')}
-                title={`إكسير غضب المعركة [${formatKeyCodeLabel(keyBindings.potion3)}]`}
-                className="px-2 py-1.5 rounded bg-[#261D10] hover:bg-[#382A16] disabled:opacity-35 text-[#E6B85C] text-xs font-mono-num flex items-center gap-1 cursor-pointer"
-              >
-                <Flame className="w-3.5 h-3.5" />
-                <span>{hud.consumables.tonic_fury}</span>
-              </button>
+              {(hud.consumables.loot_elixir || 0) > 0 && (
+                <div
+                  title={CONSUMABLES.loot_elixir.name}
+                  className="flex items-center gap-1 px-2 py-1 rounded-xl bg-[#23200D] border border-[#FDE047]/35 text-[11px]"
+                >
+                  <Coins className="w-3.5 h-3.5 text-[#FDE047] shrink-0" />
+                  <span className="font-mono-num font-bold text-[#FDE047]">×{hud.consumables.loot_elixir}</span>
+                </div>
+              )}
             </div>
           </div>
 
           {hudConfig.widgets.controlsHint && adaptive.showDesktopShortcutLine && (
-          <p className="text-[11px] text-[#94A3B8] bg-[#0B101D]/90 px-3 py-0.5 rounded border border-white/5">
-            {formatKeyCodeLabel(keyBindings.moveForward)}/{formatKeyCodeLabel(keyBindings.moveBackward)}/{formatKeyCodeLabel(keyBindings.moveLeft)}/{formatKeyCodeLabel(keyBindings.moveRight)} حركة · {formatKeyCodeLabel(keyBindings.jump)} قفز · {formatKeyCodeLabel(keyBindings.attack)} أو النقر هجوم · اسحب لتدوير الكاميرا 360° · عجلة الفأرة للتقريب
-          </p>
+            <p className="text-[11px] text-[#94A3B8] bg-[#0B101D]/88 px-3 py-0.5 rounded border border-white/5">
+              {formatKeyCodeLabel(keyBindings.moveForward)}/{formatKeyCodeLabel(keyBindings.moveBackward)}/{formatKeyCodeLabel(keyBindings.moveLeft)}/{formatKeyCodeLabel(keyBindings.moveRight)} حركة · {formatKeyCodeLabel(keyBindings.jump)} قفز · {formatKeyCodeLabel(keyBindings.lockOn)} تثبيت · {formatKeyCodeLabel(keyBindings.swapDeck)} طقم 1↔2 · {formatKeyCodeLabel(keyBindings.quickSwap)} تبديل مهارات · 1-4 الجرعات
+            </p>
           )}
         </div>
       )}
@@ -2777,6 +3056,255 @@ export const ArenaCombatView: React.FC<ArenaCombatViewProps> = ({
           </div>
         </div>
       )}
+
+      {/* In-Combat Quick Skill Swapper Modal [B] — Deep Tactical Slow-Motion 4% + Solution 3 Limits + Dual Deck Editing */}
+      {showQuickSwap && !matchResult && (() => {
+        const editedDeckSlots =
+          quickSwapDeck === 1
+            ? (hud.secondarySlotPowers || profile.avatar.secondaryPowerSlots || profile.avatar.powerSlots)
+            : (hud.primarySlotPowers || profile.avatar.powerSlots);
+        const editedSlotPowers = editedDeckSlots.map((pid) => resolvePowerDef(pid, profile.customSkills));
+        const isEditingActiveDeck = quickSwapDeck === hud.activeDeckIndex;
+        return (
+        <div
+          onPointerDown={(e) => e.stopPropagation()}
+          onClick={(e) => {
+            if (e.target === e.currentTarget) closeQuickSwap();
+          }}
+          className="absolute inset-0 z-30 bg-[#070B14]/65 flex flex-col p-2 sm:p-5 overflow-y-auto overscroll-contain"
+        >
+          <div className="m-auto w-full max-w-2xl max-h-full landscape-modal-card flex flex-col isekai-panel rounded-2xl overflow-hidden shadow-2xl border border-[#38BDF8]/35">
+            <div className="landscape-modal-header flex items-center justify-between gap-2 border-b border-white/10 p-3 sm:px-5 sm:py-3.5 shrink-0">
+              <div className="flex items-center gap-2 min-w-0">
+                <ArrowLeftRight className="w-5 h-5 text-[#E6B85C] shrink-0" />
+                <div className="min-w-0">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <h2 className="font-display text-sm sm:text-lg font-extrabold text-[#F8FAFC] truncate">
+                      التبديل التكتيكي للمهارات
+                    </h2>
+                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-bold font-mono-num bg-[#0F2438] text-[#38BDF8] border border-[#38BDF8]/40 shrink-0">
+                      <Clock className="w-3 h-3" />
+                      {mode === 'pvp_online' ? 'زمن حقيقي 100%' : 'تباطؤ تكتيكي 4%'}
+                    </span>
+                    <span
+                      className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-bold font-mono-num border shrink-0 ${
+                        hud.swapCharges > 0
+                          ? 'bg-[#10261F] text-[#34D399] border-[#10B981]/40'
+                          : 'bg-[#281318] text-[#FCA5A5] border-[#EF4444]/40'
+                      }`}
+                    >
+                      شحنات التبديل: {hud.swapCharges}/{hud.maxSwapCharges}
+                      {hud.swapCharges < hud.maxSwapCharges && hud.swapRechargeSec > 0 ? ` (${hud.swapRechargeSec}ث)` : ''}
+                    </span>
+                  </div>
+                  <p className="landscape-modal-subtitle text-[11px] text-[#94A3B8] truncate">
+                    تباطؤ 96% دون إيقاف القتال — يحتفظ التبديل بفترة الانتظار (1.5ث+) وتُستهلك شحنة واحدة (تُشحن بالموجات).
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={closeQuickSwap}
+                className="p-2 rounded-lg bg-[#16223A] hover:bg-[#223254] text-[#F1F5F9] cursor-pointer shrink-0"
+                aria-label="إغلاق التبديل السريع"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {hud.swapBlockedReason && (
+              <div className="px-4 py-1.5 bg-[#2A1419] border-b border-[#EF4444]/40 text-xs font-bold text-[#FCA5A5] shrink-0">
+                تنبيه تكتيكي: {hud.swapBlockedReason}
+              </div>
+            )}
+
+            {/* Dual Skill Deck Selector Bar */}
+            <div className="px-3 py-2 bg-[#080D18] border-b border-white/10 flex flex-wrap items-center justify-between gap-2 shrink-0">
+              <div className="flex items-center gap-1.5">
+                {([0, 1] as const).map((dIdx) => {
+                  const selected = quickSwapDeck === dIdx;
+                  const liveActive = hud.activeDeckIndex === dIdx;
+                  return (
+                    <button
+                      key={`qs_deck_${dIdx}`}
+                      type="button"
+                      onClick={() => setQuickSwapDeck(dIdx)}
+                      className={`px-3 py-1 rounded-lg text-xs font-bold border flex items-center gap-1.5 cursor-pointer transition-colors ${
+                        selected
+                          ? dIdx === 1
+                            ? 'bg-[#102944] text-[#38BDF8] border-[#38BDF8]'
+                            : 'bg-[#292011] text-[#E6B85C] border-[#E6B85C]'
+                          : 'bg-[#0E1629] text-[#94A3B8] border-white/10 hover:text-[#F8FAFC]'
+                      }`}
+                    >
+                      <Layers className="w-3.5 h-3.5" />
+                      <span>طقم {dIdx + 1}</span>
+                      {liveActive && (
+                        <span className="px-1 py-0.2 rounded bg-emerald-500/20 text-[#34D399] text-[9px]">نشط الآن</span>
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+
+              {!isEditingActiveDeck && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    simRef.current?.setCombatDeck(quickSwapDeck);
+                    setQuickSwapNotice({
+                      text: `تم تفعيل طقم المهارات ${quickSwapDeck + 1} للقتال مباشرة!`,
+                      kind: 'ok',
+                    });
+                  }}
+                  className="px-3 py-1 rounded-lg bg-[#132924] hover:bg-[#193A32] border border-[#10B981]/50 text-[#34D399] text-[11px] font-bold cursor-pointer"
+                >
+                  تفعيل طقم {quickSwapDeck + 1} فوراً [{formatKeyCodeLabel(keyBindings.swapDeck)}]
+                </button>
+              )}
+            </div>
+
+            <div className="landscape-modal-tabs grid grid-cols-4 gap-1.5 px-3 py-2.5 bg-[#090E1B] border-b border-white/10 shrink-0">
+              {([0, 1, 2, 3] as const).map((slotIdx) => {
+                const locked = slotIdx >= hud.unlockedSkillSlots;
+                const actionKey = (`skill${slotIdx}`) as 'skill0' | 'skill1' | 'skill2' | 'skill3';
+                const sp = editedSlotPowers[slotIdx];
+                const active = quickSwapSlot === slotIdx;
+                return (
+                  <button
+                    key={slotIdx}
+                    type="button"
+                    disabled={locked}
+                    onClick={() => setQuickSwapSlot(slotIdx)}
+                    className={`px-2 py-1.5 rounded-xl border text-right transition-colors ${
+                      locked
+                        ? 'bg-[#080C15] border-white/5 opacity-45 cursor-not-allowed'
+                        : active
+                          ? 'bg-[#172642] border-[#E6B85C] text-[#F8FAFC]'
+                          : 'bg-[#0E1728] border-white/10 text-[#94A3B8] hover:text-[#F1F5F9] cursor-pointer'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between text-[10px] font-mono-num">
+                      <span className="text-[#E6B85C] font-bold">[{formatKeyCodeLabel(keyBindings[actionKey])}]</span>
+                      <span>{locked ? 'مقفلة' : `خانة ${slotIdx + 1}`}</span>
+                    </div>
+                    <div className="text-[11px] font-bold truncate mt-0.5">
+                      {locked ? 'غير مفتوحة' : sp.name}
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+
+            {quickSwapNotice && (
+              <div
+                className={`px-4 py-1.5 border-b text-xs font-bold shrink-0 ${
+                  quickSwapNotice.kind === 'warn'
+                    ? 'bg-[#2A1419] border-[#EF4444]/40 text-[#FCA5A5]'
+                    : 'bg-[#10261F] border-[#10B981]/30 text-[#6EE7B7]'
+                }`}
+              >
+                {quickSwapNotice.text}
+              </div>
+            )}
+
+            <div className="landscape-modal-body flex-1 min-h-0 overflow-y-auto overscroll-contain p-3 sm:p-5 grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+              {profile.unlockedPowers.map((pid) => {
+                const pw = resolvePowerDef(pid, profile.customSkills);
+                const rank = getPowerRank(pid, profile.powerLevels[pid] || 1, profile.customSkills);
+                const rMeta = RANK_META[rank];
+                const req = checkPowerRequirements(pw, profile.avatar.stats, profile.level);
+                const equippedInIdx = editedDeckSlots.findIndex((s) => s === pid);
+                const isEquippedInSelected = equippedInIdx === quickSwapSlot;
+                return (
+                  <button
+                    key={pid}
+                    type="button"
+                    onClick={() => {
+                      if (performance.now() - quickSwapOpenedAtRef.current < 260) return;
+                      if (!req.met) {
+                        setQuickSwapNotice({
+                          text: `متطلبات غير مكتملة لـ «${pw.name}»: ${req.missingLabels.join(' · ')}`,
+                          kind: 'warn',
+                        });
+                        return;
+                      }
+                      const swapRes = simRef.current?.swapSkillSlot(quickSwapSlot, pid, quickSwapDeck);
+                      if (swapRes && !swapRes.ok) {
+                        setQuickSwapNotice({
+                          text: swapRes.reason || 'تعذّر التبديل التكتيكي حالياً.',
+                          kind: 'warn',
+                        });
+                        return;
+                      }
+                      onSwapCombatSkillSlot?.(quickSwapSlot, pid, quickSwapDeck);
+                      const snap = simRef.current?.getHudSnapshot();
+                      if (snap) setHud(snap);
+                      const inheritedSec = isEditingActiveDeck
+                        ? Math.max(1.5, hud.slotCooldowns[quickSwapSlot] || 0).toFixed(1)
+                        : '0.0';
+                      setQuickSwapNotice({
+                        text: isEditingActiveDeck
+                          ? `طقم ${quickSwapDeck + 1} · خانة ${quickSwapSlot + 1}: «${pw.name}» (انتظار ${inheritedSec}ث).`
+                          : `تم تحديث طقم ${quickSwapDeck + 1} · خانة ${quickSwapSlot + 1} إلى «${pw.name}»!`,
+                        kind: 'ok',
+                      });
+                    }}
+                    style={isEquippedInSelected ? { borderColor: '#E6B85C' } : undefined}
+                    className={`text-right p-3 rounded-xl border transition-colors flex flex-col justify-between gap-1.5 cursor-pointer ${
+                      !req.met
+                        ? 'bg-[#191015] border-[#EF4444]/30 text-[#94A3B8] opacity-80'
+                        : isEquippedInSelected
+                          ? 'bg-[#182845] text-[#F8FAFC]'
+                          : 'bg-[#0D1526] hover:bg-[#15213A] border-white/10 text-[#CBD5E1]'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="font-display font-bold text-xs sm:text-sm text-[#F8FAFC] truncate flex items-center gap-1.5">
+                        {!req.met ? (
+                          <Lock className="w-3.5 h-3.5 text-[#EF4444] shrink-0" />
+                        ) : (
+                          <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: pw.color }} />
+                        )}
+                        <span className="truncate">{pw.name}</span>
+                      </span>
+                      <span
+                        className="px-1.5 py-0.5 rounded text-[10px] font-bold font-mono-num border shrink-0"
+                        style={{ color: rMeta.color, backgroundColor: rMeta.bg, borderColor: rMeta.border }}
+                      >
+                        {rank}
+                      </span>
+                    </div>
+                    <p className="text-[11px] text-[#94A3B8] line-clamp-1">
+                      {!req.met ? `ينقصك: ${req.missingLabels.join(' · ')}` : pw.tagline}
+                    </p>
+                    <div className="flex items-center justify-between text-[10px] font-mono-num pt-1 border-t border-white/5">
+                      <span className="text-[#38BDF8]">{pw.energyCost} مانا · مدى {pw.radius}م</span>
+                      <span className={!req.met ? 'text-[#FCA5A5]' : equippedInIdx >= 0 ? 'text-[#10B981] font-bold' : 'text-[#E6B85C]'}>
+                        {!req.met ? 'مقفلة' : equippedInIdx >= 0 ? `مجهزة (خانة ${equippedInIdx + 1})` : 'اضغط للتجهيز هنا'}
+                      </span>
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+
+            <div className="landscape-modal-footer px-4 py-2.5 border-t border-white/10 bg-[#0A101D] flex items-center justify-between gap-2 shrink-0">
+              <span className="text-[11px] text-[#94A3B8] truncate">
+                زر {formatKeyCodeLabel(keyBindings.swapDeck)} يبدّل الطقم فوراً بدون فتح القائمة
+              </span>
+              <button
+                type="button"
+                onClick={closeQuickSwap}
+                className="px-5 py-1.5 rounded-xl bg-gradient-to-l from-[#E6B85C] to-[#F5D076] text-[#0A0F1A] text-xs font-extrabold cursor-pointer shrink-0"
+              >
+                متابعة القتال
+              </button>
+            </div>
+          </div>
+        </div>
+        );
+      })()}
 
       {/* HUD, Keybindings, Quality & Dual-Engine Customizer Modal */}
       <HudCustomizerModal

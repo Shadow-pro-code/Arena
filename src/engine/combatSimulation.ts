@@ -1,9 +1,11 @@
 import type {
   ArenaDef,
   ArenaId,
+  ArenaModifierId,
   AvatarConfig,
   CameraViewMode,
   ConsumableId,
+  CustomSkillDef,
   GameMode,
   GearId,
   GearSlot,
@@ -15,9 +17,12 @@ import type {
   OverworldNodeDef,
   OverworldNodeKind,
   PowerId,
+  PowerSlots,
   RivalChampion,
   SceneryPropDef,
   SecretBossDef,
+  SkillElement,
+  SkillRuneId,
   WorldChestDef,
   WorldEventZoneDef,
   WorldFastTravelDef,
@@ -25,6 +30,7 @@ import type {
 import { DEFAULT_KEY_BINDINGS } from '../data/controlDefaults';
 import {
   ARENAS,
+  ARENA_MODIFIERS,
   CONSUMABLES,
   MONSTERS,
   OVERWORLD_MAP,
@@ -35,6 +41,7 @@ import {
   WORLD_EVENT_ZONES,
   computeFighterDerivedStats,
   computeSkillNetworkBonuses,
+  resolvePowerDef,
 } from '../data/gameCatalog';
 import {
   Camera3D,
@@ -59,6 +66,15 @@ interface SimFighter extends RenderFighter {
   vz: number;
   energy: number;
   maxEnergy: number;
+  stamina: number;
+  maxStamina: number;
+  staminaExhaustTimer: number;
+  blockHoldTimer: number;
+  parryFlash: number;
+  burningTimer: number;
+  shockedTimer: number;
+  outOfCombatTimer: number;
+  isAerialSlamming: boolean;
   attackCooldown: number;
   heavyCooldown: number;
   powerCooldown: number;
@@ -92,6 +108,8 @@ interface SimMonster extends RenderMonster {
   vz: number;
   attackCooldown: number;
   stunTimer: number;
+  burningTimer: number;
+  shockedTimer: number;
   telegraphMax: number;
   pendingStrike: boolean;
   flankSlot: number;
@@ -99,6 +117,20 @@ interface SimMonster extends RenderMonster {
   secretBossId?: string;
   eventZoneId?: string;
   dmgMult?: number;
+}
+
+interface ActiveHealingWard {
+  id: string;
+  ownerId: string;
+  team: RenderFighter['team'];
+  x: number;
+  y: number;
+  z: number;
+  radius: number;
+  life: number;
+  maxLife: number;
+  tickTimer: number;
+  healAmt: number;
 }
 
 interface SimProjectile extends RenderProjectile {
@@ -189,10 +221,16 @@ export interface HudSnapshot {
   maxHp: number;
   energy: number;
   maxEnergy: number;
+  mana: number;
+  maxMana: number;
+  stamina: number;
+  maxStamina: number;
+  staminaExhausted: boolean;
   wave: number;
   kills: number;
   combo: number;
   comboTimer: number;
+  parryCount: number;
   heavyCd: number;
   heavyMaxCd: number;
   powerCd: number;
@@ -201,8 +239,22 @@ export interface HudSnapshot {
   secondaryMaxCd: number;
   slotCooldowns: [number, number, number, number];
   slotMaxCooldowns: [number, number, number, number];
+  slotPowers: PowerSlots;
+  primarySlotPowers: PowerSlots;
+  secondarySlotPowers: PowerSlots;
+  activeDeckIndex: 0 | 1;
+  timeScale: number;
+  swapCharges: number;
+  maxSwapCharges: number;
+  swapRechargeSec: number;
+  swapBlockedReason: string | null;
+  mindOverclockSec: number;
+  mindOverclockUsesLeft: number;
   dodgeCd: number;
   sprintActive: boolean;
+  lockedTargetName?: string;
+  lockedTargetHpRatio?: number;
+  activeModifiers: ArenaModifierId[];
   playerX: number;
   playerZ: number;
   scoreP1: number;
@@ -255,9 +307,14 @@ export interface CombatInitOptions {
   playerAvatar: AvatarConfig;
   playerWeaponLevel: number;
   equippedGear?: Record<GearSlot, GearId | null>;
+  gearLevels?: Partial<Record<GearId, number>>;
   unlockedSkillSlots?: 1 | 2 | 3 | 4;
   powerLevels?: Partial<Record<PowerId, number>>;
+  customSkills?: CustomSkillDef[];
+  equippedRunes?: Record<string, SkillRuneId>;
   unlockedNetworkNodes?: string[];
+  activeModifiers?: ArenaModifierId[];
+  autoDrinkHeal?: boolean;
   initialExploredChunks?: string[];
   onExploreChunk?: (chunkKey: string) => void;
   consumables?: Record<ConsumableId, number>;
@@ -275,6 +332,8 @@ export interface CombatInitOptions {
   onCompleteWorldEvent?: (zone: WorldEventZoneDef) => void;
   onCritLanded?: () => void;
   onFusionCast?: () => void;
+  onOpenQuickSwap?: () => void;
+  onToggleCombatDeck?: (nextDeck: 0 | 1) => void;
   quality: GraphicsQuality;
   cameraView: CameraViewMode;
   keyBindings?: KeyBindingsConfig;
@@ -311,6 +370,7 @@ export class CombatSimulation {
   public quality: GraphicsQuality;
   public cameraView: CameraViewMode;
   public paused = false;
+  public timeScale = 1;
   public finished = false;
 
   public fighters: SimFighter[] = [];
@@ -396,11 +456,30 @@ export class CombatSimulation {
   private currentBiomeSkyTint = '#18365C';
   private critsLanded = 0;
   private fusionCasts = 0;
+  private parryCount = 0;
   private secretBossesDefeatedCount = 0;
   private worldEventsCompletedCount = 0;
   private defeatedSecretBossIds = new Set<string>();
   private completedWorldEventIds = new Set<string>();
   private activeEventZone: { def: WorldEventZoneDef; wave: number; waveCount: number } | null = null;
+  private customSkills: CustomSkillDef[] = [];
+  private equippedRunes: Record<string, SkillRuneId> = {};
+  private activeModifiers: ArenaModifierId[] = [];
+  private autoDrinkHeal = true;
+  private autoHealCooldown = 0;
+  private lockedTargetId: string | null = null;
+  private activeWards: ActiveHealingWard[] = [];
+  private lootElixirActive = false;
+  private compassTimer = 0;
+  private elementTickTimer = 0;
+  private activeDeckIndex: 0 | 1 = 0;
+  private swapCharges = 3;
+  private readonly maxSwapCharges = 3;
+  private swapRechargeTimer = 0;
+  private mindOverclockTimer = 0;
+  private mindOverclockUsesLeft = 2;
+  private readonly maxMindOverclockUses = 2;
+  private overworldOverclockRecharge = 0;
   private nearbyInteractable: {
     label: string;
     sublabel?: string;
@@ -421,7 +500,12 @@ export class CombatSimulation {
     this.rivalChampion = opts.rivalChampion || RIVAL_CHAMPIONS[0];
     this.unlockedSkillSlots = opts.unlockedSkillSlots ?? 1;
     this.powerLevels = opts.powerLevels || {};
+    this.customSkills = opts.customSkills || [];
+    this.equippedRunes = opts.equippedRunes || {};
     this.unlockedNetworkNodes = opts.unlockedNetworkNodes || ['node_core_awakening'];
+    this.activeModifiers = this.mode === 'world_explore' ? [] : (opts.activeModifiers || []);
+    this.autoDrinkHeal = opts.autoDrinkHeal ?? true;
+    this.activeDeckIndex = opts.playerAvatar.activeDeckIndex === 1 ? 1 : 0;
     if (opts.initialDiscoveredRegions) {
       opts.initialDiscoveredRegions.forEach((id) => this.discoveredRegions.add(id));
     }
@@ -438,6 +522,10 @@ export class CombatSimulation {
       elixir_heal: opts.consumables?.elixir_heal ?? 2,
       scroll_energy: opts.consumables?.scroll_energy ?? 1,
       tonic_fury: opts.consumables?.tonic_fury ?? 1,
+      stun_bomb: opts.consumables?.stun_bomb ?? 1,
+      healing_ward: opts.consumables?.healing_ward ?? 1,
+      loot_elixir: opts.consumables?.loot_elixir ?? 0,
+      treasure_compass: opts.consumables?.treasure_compass ?? 1,
     };
 
     if (this.mode === 'world_explore') {
@@ -481,9 +569,16 @@ export class CombatSimulation {
     isRemote = false,
     equippedGear?: Record<GearSlot, GearId | null>
   ): SimFighter {
-    const derived = computeFighterDerivedStats(avatar, weaponLevel, equippedGear);
+    const derived = computeFighterDerivedStats(
+      avatar,
+      weaponLevel,
+      equippedGear,
+      team === 'player1' ? this.opts.gearLevels : undefined
+    );
     const netBonus = team === 'player1' ? computeSkillNetworkBonuses(this.unlockedNetworkNodes) : null;
-    const bonusMaxEnergy = derived.maxEnergy + (netBonus ? netBonus.bonusEnergy : 0);
+    const bonusMaxEnergy = derived.maxMana + (netBonus ? netBonus.bonusEnergy : 0);
+    const isGlassCannon = this.activeModifiers.includes('glass_cannon');
+    const effMaxHp = isGlassCannon && team === 'player1' ? Math.max(80, Math.round(derived.maxHp * 0.65)) : derived.maxHp;
     const groundY = this.getTerrainHeight(x, z);
     return {
       id,
@@ -496,10 +591,19 @@ export class CombatSimulation {
       vy: 0,
       vz: 0,
       yaw,
-      hp: derived.maxHp,
-      maxHp: derived.maxHp,
+      hp: effMaxHp,
+      maxHp: effMaxHp,
       energy: bonusMaxEnergy,
       maxEnergy: bonusMaxEnergy,
+      stamina: derived.maxStamina,
+      maxStamina: derived.maxStamina,
+      staminaExhaustTimer: 0,
+      blockHoldTimer: 0,
+      parryFlash: 0,
+      burningTimer: 0,
+      shockedTimer: 0,
+      outOfCombatTimer: 0,
+      isAerialSlamming: false,
       animState: 'idle',
       animTime: 0,
       walkPhase: 0,
@@ -671,6 +775,8 @@ export class CombatSimulation {
       pendingStrike: false,
       hitFlash: 0,
       frozenTimer: 0,
+      burningTimer: 0,
+      shockedTimer: 0,
       stunTimer: 0,
       isBoss: def.isBoss,
       flankSlot: this.idCounter % 5,
@@ -904,6 +1010,180 @@ export class CombatSimulation {
     return false;
   }
 
+  private getActiveSlots(fighter: SimFighter): PowerSlots {
+    if (fighter.team === 'player1' && this.activeDeckIndex === 1 && fighter.avatar.secondaryPowerSlots) {
+      return fighter.avatar.secondaryPowerSlots;
+    }
+    return fighter.avatar.powerSlots;
+  }
+
+  private isInSafeVillage(p1?: SimFighter | null): boolean {
+    if (this.mode !== 'world_explore') return false;
+    if (this.currentRegionName === 'قرية الملاذ الآمنة') return true;
+    return p1 ? Math.hypot(p1.x, p1.z) <= 22 : false;
+  }
+
+  public getSwapBlockedReason(): string | null {
+    const p1 = this.getPlayer1();
+    if (!p1) return 'المقاتل غير جاهز.';
+    if (this.isInSafeVillage(p1)) return null;
+    if (p1.stunTimer > 0) return 'لا يمكن التبديل أثناء الصعق!';
+    if (p1.staminaExhaustTimer > 0) return 'لا يمكن التبديل أثناء إرهاق الستامينا!';
+    if (this.swapCharges <= 0) {
+      return `نفدت شحنات التبديل (تُشحن خلال ${Math.max(1, Math.ceil(18 - this.swapRechargeTimer))}ث)`;
+    }
+    return null;
+  }
+
+  public swapSkillSlot(
+    slotIdx: 0 | 1 | 2 | 3,
+    powerId: PowerId,
+    deckIdx?: 0 | 1
+  ): { ok: boolean; reason?: string } {
+    const p1 = this.getPlayer1();
+    if (!p1) return { ok: false, reason: 'المقاتل غير جاهز.' };
+    const inSafe = this.isInSafeVillage(p1);
+    if (!inSafe) {
+      const blocked = this.getSwapBlockedReason();
+      if (blocked) {
+        this.showBanner(blocked, 1.8);
+        return { ok: false, reason: blocked };
+      }
+    }
+
+    const targetDeck: 0 | 1 = deckIdx ?? this.activeDeckIndex;
+    if (targetDeck === 1) {
+      const prevDeck2: PowerSlots = [
+        ...(p1.avatar.secondaryPowerSlots || p1.avatar.powerSlots || ['thunder_strike', 'shadow_blink', 'inferno_nova', 'holy_sanctuary']),
+      ] as PowerSlots;
+      prevDeck2[slotIdx] = powerId;
+      p1.avatar = {
+        ...p1.avatar,
+        secondaryPowerSlots: prevDeck2,
+      };
+    } else {
+      const prev: PowerSlots = [
+        ...(p1.avatar.powerSlots || ['inferno_nova', 'holy_sanctuary', 'thunder_strike', 'shadow_blink']),
+      ] as PowerSlots;
+      prev[slotIdx] = powerId;
+      p1.avatar = {
+        ...p1.avatar,
+        powerSlots: prev,
+        powerId: prev[0],
+        secondaryPowerId: prev[1],
+      };
+    }
+    if (!inSafe) {
+      this.swapCharges = Math.max(0, this.swapCharges - 1);
+    }
+    if (targetDeck === this.activeDeckIndex) {
+      const inheritedCd = Number(Math.max(p1.slotCooldowns[slotIdx] || 0, 1.5).toFixed(2));
+      p1.slotCooldowns[slotIdx] = inheritedCd;
+      if (slotIdx === 0) p1.powerCooldown = inheritedCd;
+      if (slotIdx === 1) p1.secondaryCooldown = inheritedCd;
+    }
+    const pDef = resolvePowerDef(powerId, this.customSkills);
+    this.showBanner(
+      `طقم ${targetDeck + 1} — خانة ${slotIdx + 1}: «${pDef.name}»${targetDeck === this.activeDeckIndex ? ` (انتظار ${Math.max(1.5, p1.slotCooldowns[slotIdx]).toFixed(1)}ث)` : ''}`,
+      1.8
+    );
+    return { ok: true };
+  }
+
+  public setCombatDeck(deckIdx: 0 | 1): 0 | 1 {
+    const p1 = this.getPlayer1();
+    if (!p1) return this.activeDeckIndex;
+    if (this.activeDeckIndex === deckIdx) return deckIdx;
+    this.activeDeckIndex = deckIdx;
+    p1.avatar = {
+      ...p1.avatar,
+      activeDeckIndex: deckIdx,
+    };
+    for (let i = 0; i < 4; i++) {
+      p1.slotCooldowns[i] = Math.max(p1.slotCooldowns[i] || 0, 0.65);
+    }
+    p1.powerCooldown = p1.slotCooldowns[0];
+    p1.secondaryCooldown = p1.slotCooldowns[1];
+    audioSynth.playParry();
+    this.rings.push({
+      x: p1.x,
+      y: p1.y + 0.14,
+      z: p1.z,
+      radius: 0.4,
+      maxRadius: 2.8,
+      color: deckIdx === 1 ? '#38BDF8' : '#E6B85C',
+      alpha: 0.88,
+      life: 0.35,
+      maxLife: 0.35,
+      growSpeed: 7.5,
+    });
+    this.spawnFloatingText(
+      p1.x,
+      p1.y + 2.4,
+      p1.z,
+      `طقم المهارات ${deckIdx + 1}`,
+      deckIdx === 1 ? '#38BDF8' : '#E6B85C',
+      1.12
+    );
+    this.showBanner(`تم التبديل الفوري إلى طقم المهارات ${deckIdx + 1}!`, 1.4);
+    this.opts.onToggleCombatDeck?.(deckIdx);
+    return deckIdx;
+  }
+
+  public toggleCombatDeck(): 0 | 1 {
+    return this.setCombatDeck(this.activeDeckIndex === 0 ? 1 : 0);
+  }
+
+  public toggleLockOn() {
+    const p1 = this.getPlayer1();
+    if (!p1) return;
+    if (this.lockedTargetId) {
+      this.lockedTargetId = null;
+      this.showBanner('تم إلغاء تثبيت الهدف', 1.2);
+      return;
+    }
+    let bestId: string | null = null;
+    let bestDist = 28;
+    for (const m of this.monsters) {
+      if (m.hp <= 0) continue;
+      const d = Math.hypot(m.x - p1.x, m.z - p1.z);
+      if (d < bestDist) {
+        bestDist = d;
+        bestId = m.id;
+      }
+    }
+    for (const f of this.fighters) {
+      if (f.id === p1.id || f.team === p1.team || f.hp <= 0) continue;
+      const d = Math.hypot(f.x - p1.x, f.z - p1.z);
+      if (d < bestDist) {
+        bestDist = d;
+        bestId = f.id;
+      }
+    }
+    if (bestId) {
+      this.lockedTargetId = bestId;
+      audioSynth.playParry();
+      this.showBanner('تم تثبيت الهدف بنجاح', 1.2);
+    } else {
+      this.showBanner('لا يوجد هدف قريب لتثبيته', 1.2);
+    }
+  }
+
+  private getLockedTarget(): { id: string; name: string; x: number; y: number; z: number; hp: number; maxHp: number; radius: number } | null {
+    if (!this.lockedTargetId) return null;
+    const m = this.monsters.find((x) => x.id === this.lockedTargetId && x.hp > 0);
+    if (m) {
+      const sc = (MONSTERS[m.archetype]?.scale || 1) * 1.15;
+      return { id: m.id, name: m.name, x: m.x, y: m.y, z: m.z, hp: m.hp, maxHp: m.maxHp, radius: Math.max(1.1, sc) };
+    }
+    const f = this.fighters.find((x) => x.id === this.lockedTargetId && x.hp > 0);
+    if (f) {
+      return { id: f.id, name: f.name, x: f.x, y: f.y, z: f.z, hp: f.hp, maxHp: f.maxHp, radius: 1.05 };
+    }
+    this.lockedTargetId = null;
+    return null;
+  }
+
   private triggerJump(fighter: SimFighter): boolean {
     if (fighter.stunTimer > 0) return false;
     const groundY = this.getTerrainHeight(fighter.x, fighter.z);
@@ -912,7 +1192,7 @@ export class CombatSimulation {
       fighter.jumpBufferTimer = 0.14;
       return false;
     }
-    fighter.vy = 11.4 + Math.min(2.4, fighter.avatar.stats.agi * 0.08);
+    fighter.vy = (11.4 + Math.min(2.4, fighter.avatar.stats.agi * 0.08)) * fighter.statsDerived.jumpHeightMult;
     fighter.y = Math.max(fighter.y, groundY + 0.04);
     fighter.coyoteTimer = 0;
     fighter.jumpBufferTimer = 0;
@@ -942,9 +1222,17 @@ export class CombatSimulation {
       else if (code === kb.dodge || (kb.dodge === 'ShiftLeft' && code === 'ShiftRight'))
         this.queueOrRunPlayerAction('dodge');
       else if (code === kb.interact) this.triggerInteract();
+      else if (code === kb.lockOn) this.toggleLockOn();
+      else if (code === kb.quickSwap) this.opts.onOpenQuickSwap?.();
+      else if (code === kb.swapDeck && this.mode !== 'pvp_local') this.toggleCombatDeck();
       else if (code === kb.potion1) this.triggerConsumable('elixir_heal');
       else if (code === kb.potion2) this.triggerConsumable('scroll_energy');
       else if (code === kb.potion3) this.triggerConsumable('tonic_fury');
+      else if (code === kb.potion4) {
+        if ((this.localConsumables.stun_bomb || 0) > 0) this.triggerConsumable('stun_bomb');
+        else if ((this.localConsumables.healing_ward || 0) > 0) this.triggerConsumable('healing_ward');
+        else this.triggerConsumable('treasure_compass');
+      }
       else if (code === 'Equal' || code === 'NumpadAdd') this.zoomCamera(-0.1);
       else if (code === 'Minus' || code === 'NumpadSubtract') this.zoomCamera(0.1);
     }
@@ -975,6 +1263,8 @@ export class CombatSimulation {
       | 'block_end'
       | 'interact'
       | 'sprint'
+      | 'lock_on'
+      | 'swap_deck'
   ) {
     if (this.paused || this.finished) return;
     const p1 = this.getPlayer1();
@@ -989,6 +1279,8 @@ export class CombatSimulation {
     else if (action === 'jump') this.triggerJump(p1);
     else if (action === 'interact') this.triggerInteract();
     else if (action === 'sprint') this.toggleSprint();
+    else if (action === 'lock_on') this.toggleLockOn();
+    else if (action === 'swap_deck') this.toggleCombatDeck();
     else if (action === 'block_start') this.keys.add(this.keyBindings.block);
     else if (action === 'block_end') this.keys.delete(this.keyBindings.block);
   }
@@ -1086,6 +1378,8 @@ export class CombatSimulation {
         pendingStrike: false,
         hitFlash: 0,
         frozenTimer: 0,
+        burningTimer: 0,
+        shockedTimer: 0,
         stunTimer: 0,
         isBoss: true,
         flankSlot: 0,
@@ -1173,6 +1467,8 @@ export class CombatSimulation {
         pendingStrike: false,
         hitFlash: 0,
         frozenTimer: 0,
+        burningTimer: 0,
+        shockedTimer: 0,
         stunTimer: 0,
         isBoss: def.isBoss,
         flankSlot: i % 5,
@@ -1184,6 +1480,10 @@ export class CombatSimulation {
 
   public triggerConsumable(id: ConsumableId): boolean {
     if (this.paused || this.finished) return false;
+    if (this.activeModifiers.includes('no_potions')) {
+      this.showBanner('مُعدِّل المخاطرة «حظر الجرعات» يمنع استخدام الأدوات في هذه المعركة!', 1.8);
+      return false;
+    }
     const p1 = this.getPlayer1();
     if (!p1 || p1.hp <= 0) return false;
     if ((this.localConsumables[id] || 0) <= 0) return false;
@@ -1195,23 +1495,95 @@ export class CombatSimulation {
     const def = CONSUMABLES[id];
 
     if (id === 'elixir_heal') {
-      const amt = Math.round(p1.maxHp * 0.4);
+      const amt = Math.round(p1.maxHp * 0.42);
       p1.hp = Math.min(p1.maxHp, p1.hp + amt);
       this.spawnFloatingText(p1.x, p1.y + 2.5, p1.z, `+${amt} شفاء ملكي`, def.color, 1.2);
       audioSynth.playReward();
     } else if (id === 'scroll_energy') {
       p1.energy = p1.maxEnergy;
-      for (let i = 0; i < 4; i++) {
-        p1.slotCooldowns[i] = p1.slotCooldowns[i] * 0.5;
-      }
-      p1.powerCooldown = p1.slotCooldowns[0];
-      p1.secondaryCooldown = p1.slotCooldowns[1];
-      this.spawnFloatingText(p1.x, p1.y + 2.5, p1.z, 'طاقة كاملة!', def.color, 1.2);
+      p1.stamina = p1.maxStamina;
+      p1.staminaExhaustTimer = 0;
+      p1.slotCooldowns = [0, 0, 0, 0];
+      p1.powerCooldown = 0;
+      p1.secondaryCooldown = 0;
+      this.spawnFloatingText(p1.x, p1.y + 2.5, p1.z, 'طاقة ومانا كاملة!', def.color, 1.2);
       audioSynth.playPower();
     } else if (id === 'tonic_fury') {
       p1.overdriveTimer = Math.max(p1.overdriveTimer, 6.5);
       p1.overdriveActive = true;
       this.spawnFloatingText(p1.x, p1.y + 2.5, p1.z, 'إكسير الغضب!', def.color, 1.25);
+      audioSynth.playPower();
+    } else if (id === 'stun_bomb') {
+      const rad = 7.5;
+      audioSynth.playFusionCast();
+      this.addCameraShake(0.25, 0.35);
+      for (const m of this.monsters) {
+        if (m.hp > 0 && Math.hypot(m.x - p1.x, m.z - p1.z) <= rad) {
+          m.stunTimer = Math.max(m.stunTimer, 2.8);
+          m.shockedTimer = Math.max(m.shockedTimer, 2.5);
+          this.damageMonster(p1, m, Math.round(p1.statsDerived.heavyDamage * 0.9), 8.5, true);
+        }
+      }
+      for (const f of this.fighters) {
+        if (f.id !== p1.id && f.team !== p1.team && f.hp > 0 && Math.hypot(f.x - p1.x, f.z - p1.z) <= rad) {
+          f.stunTimer = Math.max(f.stunTimer, 2.2);
+          this.damageFighter(p1, f, Math.round(p1.statsDerived.heavyDamage * 0.8), 8.0, true);
+        }
+      }
+      this.spawnFloatingText(p1.x, p1.y + 2.5, p1.z, 'قنبلة صعق ميدانية!', def.color, 1.25);
+    } else if (id === 'healing_ward') {
+      this.activeWards.push({
+        id: this.nextId('ward'),
+        ownerId: p1.id,
+        team: p1.team,
+        x: p1.x,
+        y: p1.y,
+        z: p1.z,
+        radius: 5.5,
+        life: 7.0,
+        maxLife: 7.0,
+        tickTimer: 0.25,
+        healAmt: Math.round(p1.maxHp * 0.09),
+      });
+      audioSynth.playReward();
+      this.spawnFloatingText(p1.x, p1.y + 2.5, p1.z, 'نُصب وتد الشفاء (7ث)', def.color, 1.2);
+    } else if (id === 'loot_elixir') {
+      this.lootElixirActive = true;
+      audioSynth.playReward();
+      this.spawnFloatingText(p1.x, p1.y + 2.5, p1.z, 'بركة الغنائم (+35%)!', def.color, 1.25);
+    } else if (id === 'treasure_compass') {
+      this.compassTimer = 10.0;
+      p1.stamina = Math.min(p1.maxStamina, p1.stamina + 35);
+      p1.energy = Math.min(p1.maxEnergy, p1.energy + 30);
+      if (this.mode === 'world_explore') {
+        const unopened = (this.arena.worldChests || []).filter((c) => !this.openedChests.has(c.id));
+        if (unopened.length > 0) {
+          unopened.sort((a, b) => Math.hypot(a.x - p1.x, a.z - p1.z) - Math.hypot(b.x - p1.x, b.z - p1.z));
+          const target = unopened[0];
+          const ang = Math.atan2(target.x - p1.x, target.z - p1.z);
+          for (let s = 1; s <= 6; s++) {
+            this.particles.push({
+              x: p1.x + Math.sin(ang) * (s * 2.2),
+              y: p1.y + 1.1,
+              z: p1.z + Math.cos(ang) * (s * 2.2),
+              vx: Math.sin(ang) * 3,
+              vy: 0.6,
+              vz: Math.cos(ang) * 3,
+              size: 4.5,
+              color: '#FDE047',
+              alpha: 1,
+              life: 1.8,
+              maxLife: 1.8,
+            });
+          }
+          const dist = Math.round(Math.hypot(target.x - p1.x, target.z - p1.z));
+          this.showBanner(`بوصلة الكنوز: أقرب صندوق يبعد ${dist}م باتجاه الأثر الذهبي!`, 3.0);
+        } else {
+          this.showBanner('كل الصناديق مفتوحة — سرعة +25% وتجديد طاقة!', 2.0);
+        }
+      } else {
+        this.spawnFloatingText(p1.x, p1.y + 2.5, p1.z, 'سرعة الرياح + طاقة!', def.color, 1.2);
+      }
       audioSynth.playPower();
     }
 
@@ -1221,12 +1593,12 @@ export class CombatSimulation {
       y: p1.y + 0.1,
       z: p1.z,
       radius: 0.4,
-      maxRadius: 3.2,
+      maxRadius: id === 'stun_bomb' ? 7.5 : 3.2,
       color: def.color,
       alpha: 0.9,
       life: 0.4,
       maxLife: 0.4,
-      growSpeed: 7.5,
+      growSpeed: id === 'stun_bomb' ? 18 : 7.5,
     });
     return true;
   }
@@ -1236,6 +1608,12 @@ export class CombatSimulation {
     z: number;
     dist: number;
   } | null {
+    if (attacker.team === 'player1') {
+      const locked = this.getLockedTarget();
+      if (locked) {
+        return { x: locked.x, z: locked.z, dist: Math.hypot(locked.x - attacker.x, locked.z - attacker.z) };
+      }
+    }
     let best: { x: number; z: number; dist: number } | null = null;
     for (const m of this.monsters) {
       if (m.hp <= 0) continue;
@@ -1252,6 +1630,15 @@ export class CombatSimulation {
 
   private triggerPrimaryAttack(fighter: SimFighter): boolean {
     if (fighter.attackCooldown > 0 || fighter.stunTimer > 0 || fighter.dodgeTimer > 0) return false;
+    if (fighter.isAirborne && fighter.y > this.getTerrainHeight(fighter.x, fighter.z) + 0.68 && !fighter.isAerialSlamming) {
+      fighter.isAerialSlamming = true;
+      fighter.vy = -24;
+      fighter.animState = 'heavy';
+      fighter.animTime = 0;
+      fighter.attackCooldown = 0.35;
+      audioSynth.playSwing(0.7);
+      return true;
+    }
     const weapon = WEAPONS[fighter.avatar.weaponId] || WEAPONS.vanguard_sword;
     const nearest = this.findNearestHostile(fighter);
     if (nearest && nearest.dist < (weapon.isRanged ? 16 : 6.0)) {
@@ -1270,7 +1657,7 @@ export class CombatSimulation {
     const rollMult = rollChainBonus ? 1.15 : 1.0;
     const baseDmg = fighter.statsDerived.attackDamage * comboMult * overdriveMult * highGroundMult * rollMult;
     const isCrit = Math.random() * 100 < fighter.statsDerived.critChance + (rollChainBonus ? 12 : 0);
-    const dmg = Math.round(baseDmg * (isCrit ? 1.65 : 1));
+    const dmg = Math.round(baseDmg * (isCrit ? fighter.statsDerived.critMult : 1));
 
     fighter.animState = 'attack';
     fighter.animTime = 0;
@@ -1292,6 +1679,8 @@ export class CombatSimulation {
             : 1.0
       );
     }
+
+    const slashCol = fighter.avatar.slashColor || weapon.energyColor;
 
     if (weapon.isRanged) {
       const speed =
@@ -1316,12 +1705,12 @@ export class CombatSimulation {
             z: fighter.z + Math.cos(a) * 0.9,
             vx: Math.sin(a) * speed,
             vz: Math.cos(a) * speed,
-            color: weapon.energyColor,
+            color: slashCol,
             coreColor: '#FFFFFF',
             radius: 0.25,
             kind: 'orb',
             damage: Math.round(dmg * 0.62),
-            knockback: weapon.knockback * 0.7,
+            knockback: weapon.knockback * 0.7 * fighter.statsDerived.knockbackMult,
             life: 1.4,
             homing: true,
             critical: isCrit,
@@ -1337,12 +1726,12 @@ export class CombatSimulation {
           z: fighter.z + Math.cos(fighter.yaw) * 0.9,
           vx: Math.sin(fighter.yaw) * speed,
           vz: Math.cos(fighter.yaw) * speed,
-          color: weapon.energyColor,
+          color: slashCol,
           coreColor: '#FFFFFF',
           radius: weapon.role === 'magic' || weapon.role === 'support' ? 0.32 : 0.22,
           kind: weapon.id === 'solar_bow' ? 'arrow' : 'orb',
           damage: dmg,
-          knockback: weapon.knockback,
+          knockback: weapon.knockback * fighter.statsDerived.knockbackMult,
           life: 1.45,
           homing: weapon.id === 'void_staff' || weapon.id === 'astral_censer',
           critical: isCrit,
@@ -1359,7 +1748,7 @@ export class CombatSimulation {
         yaw: fighter.yaw,
         radius: weapon.range * 0.92,
         arcSpread: weapon.id === 'dragon_spear' ? 0.85 : 2.15,
-        color: weapon.energyColor,
+        color: slashCol,
         alpha: 0.88,
         tilt: fighter.comboStep === 1 ? -0.48 : 0.48,
         life: isCrit ? 0.28 : 0.22,
@@ -1367,13 +1756,32 @@ export class CombatSimulation {
         critical: isCrit,
       });
 
-      this.applyMeleeHitCone(fighter, weapon.range, weapon.id === 'dragon_spear' ? 0.65 : 1.4, dmg, weapon.knockback, isCrit);
+      this.applyMeleeHitCone(fighter, weapon.range, weapon.id === 'dragon_spear' ? 0.65 : 1.4, dmg, weapon.knockback * fighter.statsDerived.knockbackMult, isCrit);
     }
     return true;
   }
 
   private triggerHeavySkill(fighter: SimFighter): boolean {
     if (fighter.heavyCooldown > 0 || fighter.stunTimer > 0) return false;
+    if (fighter.isAirborne && fighter.y > this.getTerrainHeight(fighter.x, fighter.z) + 0.65 && !fighter.isAerialSlamming) {
+      fighter.isAerialSlamming = true;
+      fighter.vy = -26;
+      fighter.animState = 'heavy';
+      fighter.animTime = 0;
+      fighter.heavyCooldown = 0.85;
+      audioSynth.playSwing(0.6);
+      return true;
+    }
+    const stamCost = 16;
+    if (fighter.staminaExhaustTimer > 0 || fighter.stamina < stamCost) {
+      if (fighter.team === 'player1') {
+        this.spawnFloatingText(fighter.x, fighter.y + 2.3, fighter.z, 'طاقة غير كافية!', '#F59E0B', 0.95);
+      }
+      return false;
+    }
+    fighter.stamina = Math.max(0, fighter.stamina - stamCost);
+    if (fighter.stamina <= 0) fighter.staminaExhaustTimer = 1.15;
+
     const weapon = WEAPONS[fighter.avatar.weaponId] || WEAPONS.vanguard_sword;
     const nearest = this.findNearestHostile(fighter);
     if (nearest && nearest.dist < 15) {
@@ -1383,11 +1791,11 @@ export class CombatSimulation {
     const overdriveMult = fighter.overdriveActive ? 1.55 : 1.0;
     const highGroundMult = fighter.onHighGround ? 1.12 : 1.0;
     const isCrit = Math.random() * 100 < fighter.statsDerived.critChance + 15;
-    const dmg = Math.round(fighter.statsDerived.heavyDamage * overdriveMult * highGroundMult * (isCrit ? 1.55 : 1));
+    const dmg = Math.round(fighter.statsDerived.heavyDamage * overdriveMult * highGroundMult * (isCrit ? fighter.statsDerived.critMult : 1));
 
     fighter.animState = 'heavy';
     fighter.animTime = 0;
-    fighter.heavyCooldown = 4.2 * (1 - fighter.statsDerived.cooldownReduction);
+    fighter.heavyCooldown = 0.95 * (1 - fighter.statsDerived.cooldownReduction);
     fighter.attackCooldown = 0.28;
 
     audioSynth.playSwing(0.65);
@@ -1548,26 +1956,55 @@ export class CombatSimulation {
       return false;
     }
 
-    const slots = fighter.avatar.powerSlots;
+    const slots = this.getActiveSlots(fighter);
     const powerId: PowerId =
       slots?.[slotIdx] || (slotIdx === 0 ? fighter.avatar.powerId : fighter.avatar.secondaryPowerId);
-    const power = POWERS[powerId] || POWERS.inferno_nova;
+    const power = resolvePowerDef(powerId, fighter.team === 'player1' ? this.customSkills : undefined);
     const skillLv = fighter.team === 'player1' ? (this.powerLevels[powerId] || 1) : 1;
     const netBonus = fighter.team === 'player1' ? computeSkillNetworkBonuses(this.unlockedNetworkNodes) : null;
-    const effEnergyCost = Math.round(power.energyCost * (netBonus ? netBonus.energyCostMult : 1));
+    const rune: SkillRuneId = fighter.team === 'player1' ? (this.equippedRunes[powerId] || 'standard') : 'standard';
+
+    const runeCostMult = rune === 'expand' ? 1.15 : rune === 'haste' ? 0.78 : 1.0;
+    const runeRadMult = rune === 'expand' ? 1.25 : 1.0;
+    const runeCdMult = rune === 'haste' ? 0.75 : 1.0;
+
+    const effEnergyCost = Math.max(8, Math.round(power.energyCost * (netBonus ? netBonus.energyCostMult : 1) * runeCostMult));
     const effRadius = Number(
-      (power.radius * (1 + (skillLv - 1) * 0.08) * (netBonus ? netBonus.radiusMult : 1)).toFixed(2)
+      (
+        power.radius *
+        (1 + (skillLv - 1) * 0.08) *
+        (netBonus ? netBonus.radiusMult : 1) *
+        fighter.statsDerived.powerRadiusMult *
+        runeRadMult
+      ).toFixed(2)
     );
 
     const cd = fighter.slotCooldowns[slotIdx];
-    if (cd > 0 || fighter.energy < effEnergyCost || fighter.stunTimer > 0) return false;
+    if (cd > 0 || fighter.stunTimer > 0) return false;
+    if (power.id === 'mind_overclock' && fighter.team === 'player1' && this.mindOverclockUsesLeft <= 0) {
+      this.spawnFloatingText(fighter.x, fighter.y + 2.4, fighter.z, 'انتهت شحنات تسريع التفكير!', '#F59E0B', 1.05);
+      this.showBanner('وصلت للحد الأقصى لمهارة «تسريع التفكير الذهني» (2/2) في هذه الموجة!', 2.0);
+      return false;
+    }
+    if (fighter.energy < effEnergyCost) {
+      if (fighter.team === 'player1') {
+        this.spawnFloatingText(fighter.x, fighter.y + 2.3, fighter.z, `تحتاج ${effEnergyCost} مانا`, '#38BDF8', 0.95);
+      }
+      return false;
+    }
 
     fighter.energy -= effEnergyCost;
+    if (rune === 'siphon') {
+      const siphonHeal = Math.round(fighter.maxHp * 0.1);
+      fighter.hp = Math.min(fighter.maxHp, fighter.hp + siphonHeal);
+      fighter.stamina = Math.min(fighter.maxStamina, fighter.stamina + 12);
+    }
+
     const cdFactor = Math.max(
       0.35,
-      1 - fighter.statsDerived.cooldownReduction - (netBonus ? netBonus.cdrMult : 0) - (skillLv - 1) * 0.06
+      (1 - fighter.statsDerived.cooldownReduction - (netBonus ? netBonus.cdrMult : 0) - (skillLv - 1) * 0.06) * runeCdMult
     );
-    const effCd = power.cooldown * cdFactor;
+    const effCd = Math.max(0.4, power.cooldown * cdFactor);
     fighter.slotCooldowns[slotIdx] = effCd;
     if (slotIdx === 0) fighter.powerCooldown = effCd;
     if (slotIdx === 1) fighter.secondaryCooldown = effCd;
@@ -1601,7 +2038,7 @@ export class CombatSimulation {
         maxLife: 0.58,
         growSpeed: effRadius * 2.35,
         isFusion: true,
-        secondaryColor: '#FDE047',
+        secondaryColor: power.secondaryColor || '#FDE047',
       });
     } else {
       audioSynth.playPower();
@@ -1847,6 +2284,35 @@ export class CombatSimulation {
           critical: true,
         });
       });
+    } else if (power.id === 'mind_overclock') {
+      if (fighter.team === 'player1') {
+        this.mindOverclockUsesLeft = Math.max(0, this.mindOverclockUsesLeft - 1);
+      }
+      if (this.mode === 'pvp_online') {
+        fighter.overdriveTimer = Math.max(fighter.overdriveTimer, 4.0);
+        fighter.overdriveActive = true;
+        this.spawnFloatingText(fighter.x, fighter.y + 2.6, fighter.z, 'تسريع التفكير (1.25x)!', '#22D3EE', 1.25);
+      } else {
+        this.mindOverclockTimer = 4.0;
+        this.spawnFloatingText(fighter.x, fighter.y + 2.6, fighter.z, 'تسريع التفكير الذهني! (0.32x)', '#22D3EE', 1.3);
+        this.showBanner(
+          `تسريع التفكير الذهني: تباطؤ العالم (0.32x) وتسريعك (1.25x) لـ 4ث · متبقي ${this.mindOverclockUsesLeft}/${this.maxMindOverclockUses}`,
+          2.4
+        );
+      }
+      this.rings.push({
+        x: fighter.x,
+        y: fighter.y + 0.12,
+        z: fighter.z,
+        radius: 0.6,
+        maxRadius: effRadius,
+        color: '#22D3EE',
+        alpha: 0.96,
+        life: 0.55,
+        maxLife: 0.55,
+        growSpeed: effRadius * 2.2,
+      });
+      this.spawnBurst(fighter.x, fighter.y + 1.3, fighter.z, '#67E8F9', 20);
     } else if (power.id === 'fusion_plasma_tempest') {
       this.spawnFloatingText(fighter.x, fighter.y + 2.7, fighter.z, 'عاصفة البلازما!', '#FB923C', 1.35);
       this.rings.push({
@@ -1990,6 +2456,13 @@ export class CombatSimulation {
           color: '#F43F5E',
         });
       }
+    } else {
+      // Dynamic synthesized custom skills & generic motionKind executor
+      this.executeDynamicSkill(fighter, power, effRadius, scaledDmg);
+    }
+
+    if (power.element) {
+      this.applyElementalSkillArea(fighter, power.element, effRadius, scaledDmg);
     }
 
     if (this.mode === 'pvp_online' && fighter.team === 'player1') {
@@ -2004,13 +2477,162 @@ export class CombatSimulation {
     return true;
   }
 
+  private executeDynamicSkill(
+    fighter: SimFighter,
+    power: ReturnType<typeof resolvePowerDef>,
+    effRadius: number,
+    scaledDmg: number
+  ) {
+    const motion = power.motionKind || 'aoe_burst';
+    this.spawnFloatingText(fighter.x, fighter.y + 2.6, fighter.z, `${power.name}!`, power.color, 1.28);
+
+    if (motion === 'dash_strike') {
+      const sx = fighter.x;
+      const sz = fighter.z;
+      for (let k = 0; k < 4; k++) {
+        this.dashTrails.push({
+          x: sx + Math.sin(fighter.yaw) * (k * 1.8),
+          y: fighter.y,
+          z: sz + Math.cos(fighter.yaw) * (k * 1.8),
+          yaw: fighter.yaw,
+          color: power.color,
+          alpha: 0.9,
+          hScale: fighter.avatar.heightScale,
+          life: 0.38,
+          maxLife: 0.38,
+        });
+      }
+      fighter.x += Math.sin(fighter.yaw) * 6.8;
+      fighter.z += Math.cos(fighter.yaw) * 6.8;
+      fighter.invulnTimer = Math.max(fighter.invulnTimer, 0.55);
+      this.constrainToArena(fighter);
+      this.spawnBurst(fighter.x, fighter.y + 1.2, fighter.z, power.color, 16);
+      this.applyRadialDamage(fighter, (sx + fighter.x) * 0.5, (sz + fighter.z) * 0.5, 4.2, Math.round(scaledDmg * 0.72), 6.5, true);
+      this.applyRadialDamage(fighter, fighter.x, fighter.z, effRadius * 0.75, Math.round(scaledDmg * 0.6), 7.5, true);
+    } else if (motion === 'sky_rain') {
+      fighter.vy = 4.4;
+      for (let i = 0; i < 4; i++) {
+        const a = fighter.yaw + (i - 1.5) * 0.5;
+        const dist = 3.2 + i * 1.4;
+        this.pendingMeteors.push({
+          x: fighter.x + Math.sin(a) * dist,
+          z: fighter.z + Math.cos(a) * dist,
+          delay: 0.14 + i * 0.2,
+          damage: Math.round(scaledDmg * 0.52),
+          ownerId: fighter.id,
+          color: power.color,
+        });
+      }
+    } else if (motion === 'beam') {
+      fighter.vy = 3.6;
+      [-0.28, -0.09, 0.09, 0.28].forEach((offset) => {
+        const a = fighter.yaw + offset;
+        this.projectiles.push({
+          id: this.nextId('proj'),
+          ownerId: fighter.id,
+          team: fighter.team,
+          x: fighter.x + Math.sin(a) * 1.0,
+          y: fighter.y + 1.35,
+          z: fighter.z + Math.cos(a) * 1.0,
+          vx: Math.sin(a) * 21,
+          vz: Math.cos(a) * 21,
+          color: power.color,
+          coreColor: power.secondaryColor || '#FFFFFF',
+          radius: 0.35,
+          kind: 'orb',
+          damage: Math.round(scaledDmg * 0.45),
+          knockback: 5.0,
+          life: 1.55,
+          homing: true,
+          critical: true,
+        });
+      });
+    } else if (motion === 'sanctuary_ward') {
+      const heal = Math.round(fighter.maxHp * 0.28);
+      fighter.hp = Math.min(fighter.maxHp, fighter.hp + heal);
+      fighter.shieldTimer = Math.max(fighter.shieldTimer, 4.5);
+      fighter.shieldActive = true;
+      this.spawnBurst(fighter.x, fighter.y + 1.2, fighter.z, power.secondaryColor || power.color, 18);
+      this.applyRadialDamage(fighter, fighter.x, fighter.z, effRadius, Math.round(scaledDmg * 0.85), 9.0, false);
+    } else {
+      this.spawnBurst(fighter.x, fighter.y + 1.2, fighter.z, power.color, 20);
+      this.applyRadialDamage(fighter, fighter.x, fighter.z, effRadius, scaledDmg, 10.5, true);
+    }
+  }
+
+  private applyElementalSkillArea(
+    attacker: SimFighter,
+    element: SkillElement,
+    radius: number,
+    scaledDmg: number
+  ) {
+    if (element === 'light') {
+      attacker.hp = Math.min(attacker.maxHp, attacker.hp + Math.round(attacker.maxHp * 0.06));
+      attacker.energy = Math.min(attacker.maxEnergy, attacker.energy + 6);
+    } else if (element === 'earth') {
+      attacker.shieldTimer = Math.max(attacker.shieldTimer, 2.2);
+      attacker.shieldActive = true;
+    }
+
+    for (const m of this.monsters) {
+      if (m.hp <= 0) continue;
+      if (Math.hypot(m.x - attacker.x, m.z - attacker.z) > radius + 1.2) continue;
+
+      if (element === 'fire') {
+        if (m.frozenTimer > 0) {
+          m.frozenTimer = 0;
+          const bonus = Math.round(scaledDmg * 0.38);
+          this.spawnFloatingText(m.x, m.y + 2.8, m.z, `تبخّر متفجر! -${bonus}`, '#FB923C', 1.26);
+          this.damageMonster(attacker, m, bonus, 4.5, true);
+        }
+        m.burningTimer = Math.max(m.burningTimer, 3.2);
+      } else if (element === 'frost') {
+        if (m.shockedTimer > 0) {
+          m.shockedTimer = 0;
+          m.stunTimer = Math.max(m.stunTimer, 1.4);
+          const bonus = Math.round(scaledDmg * 0.4);
+          this.spawnFloatingText(m.x, m.y + 2.8, m.z, `انفجار جليد صاعق! -${bonus}`, '#67E8F9', 1.26);
+          this.damageMonster(attacker, m, bonus, 4.5, true);
+        }
+        m.frozenTimer = Math.max(m.frozenTimer, 3.0);
+      } else if (element === 'lightning') {
+        if (m.burningTimer > 0) {
+          m.burningTimer = 0;
+          const bonus = Math.round(scaledDmg * 0.42);
+          this.spawnFloatingText(m.x, m.y + 2.8, m.z, `حمل حراري زائد! -${bonus}`, '#FDE047', 1.3);
+          this.damageMonster(attacker, m, bonus, 6.5, true);
+        }
+        m.shockedTimer = Math.max(m.shockedTimer, 3.0);
+        m.stunTimer = Math.max(m.stunTimer, 0.8);
+      } else if (element === 'void') {
+        if (m.burningTimer > 0 || m.shockedTimer > 0) {
+          m.burningTimer = 0;
+          m.shockedTimer = 0;
+          const bonus = Math.round(scaledDmg * 0.45);
+          this.spawnFloatingText(m.x, m.y + 2.8, m.z, `تمزّق أثيري! -${bonus}`, '#C084FC', 1.3);
+          this.damageMonster(attacker, m, bonus, 5.5, true);
+        }
+      }
+    }
+  }
+
   private triggerDodge(fighter: SimFighter): boolean {
     if (fighter.dodgeCooldown > 0 || fighter.stunTimer > 0) return false;
+    const stamCost = 20;
+    if (fighter.staminaExhaustTimer > 0 || fighter.stamina < stamCost) {
+      if (fighter.team === 'player1') {
+        this.spawnFloatingText(fighter.x, fighter.y + 2.3, fighter.z, 'لا توجد طاقة مراوغة!', '#F59E0B', 0.95);
+      }
+      return false;
+    }
+    fighter.stamina = Math.max(0, fighter.stamina - stamCost);
+    if (fighter.stamina <= 0) fighter.staminaExhaustTimer = 1.15;
+
     fighter.dodgeTimer = 0.24;
     fighter.dodgeChainTimer = 0.55;
-    fighter.invulnTimer = 0.38;
+    fighter.invulnTimer = 0.4;
     fighter.attackCooldown = Math.min(fighter.attackCooldown, 0.1);
-    fighter.dodgeCooldown = Math.max(0.65, 1.3 - fighter.avatar.stats.agi * 0.038);
+    fighter.dodgeCooldown = Math.max(0.45, 0.95 - fighter.avatar.stats.agi * 0.025);
     fighter.animState = 'dodge';
     fighter.animTime = 0;
     this.dashTrails.push({
@@ -2024,8 +2646,9 @@ export class CombatSimulation {
       life: 0.28,
       maxLife: 0.28,
     });
-    fighter.vx = Math.sin(fighter.yaw) * 16.5;
-    fighter.vz = Math.cos(fighter.yaw) * 16.5;
+    const dashSpeed = 16.5 * fighter.statsDerived.dodgeDistMult;
+    fighter.vx = Math.sin(fighter.yaw) * dashSpeed;
+    fighter.vz = Math.cos(fighter.yaw) * dashSpeed;
     audioSynth.playDodge();
     this.spawnBurst(fighter.x, fighter.y + 0.4, fighter.z, '#CBD5E1', 6);
     return true;
@@ -2142,11 +2765,13 @@ export class CombatSimulation {
     this.applyWeaponOnHitEffects(attacker, damage);
 
     if (attacker.team === 'player1') {
+      attacker.outOfCombatTimer = 0;
       this.damageDealt += damage;
       this.combo += 1;
       this.comboTimer = 3.5;
       if (this.combo > this.maxCombo) this.maxCombo = this.combo;
-      attacker.energy = Math.min(attacker.maxEnergy, attacker.energy + 7);
+      attacker.energy = Math.min(attacker.maxEnergy, attacker.energy + 8);
+      attacker.stamina = Math.min(attacker.maxStamina, attacker.stamina + 4);
       if (critical) {
         this.critsLanded += 1;
         this.opts.onCritLanded?.();
@@ -2254,21 +2879,65 @@ export class CombatSimulation {
       return;
     }
 
-    let finalDmg = rawDamage * (1 - target.statsDerived.armorReduction);
+    target.outOfCombatTimer = 0;
+    const glassOut = this.activeModifiers.includes('glass_cannon') ? 1.45 : 1.0;
+    let finalDmg = rawDamage * glassOut * (1 - target.statsDerived.armorReduction);
     if (target.shieldActive) finalDmg *= 0.35;
 
     const targetWeapon = WEAPONS[target.avatar.weaponId];
     if (target.animState === 'block') {
-      finalDmg *= targetWeapon?.role === 'defense' ? 0.16 : 0.28;
-      audioSynth.playParry();
-      this.spawnFloatingText(target.x, target.y + 2.3, target.z, 'صدّ!', '#38BDF8', 1.12);
-      if (attacker) {
-        attacker.stunTimer = Math.max(attacker.stunTimer, targetWeapon?.role === 'defense' ? 0.85 : 0.45);
-        // Defense weapons reflect 35% of blocked damage back!
-        if (targetWeapon?.role === 'defense') {
-          const reflectDmg = Math.max(5, Math.round(rawDamage * 0.35));
+      const isPerfectParry = target.blockHoldTimer <= target.statsDerived.parryWindowSec;
+      if (isPerfectParry) {
+        audioSynth.playParry();
+        target.parryFlash = 0.65;
+        target.invulnTimer = Math.max(target.invulnTimer, 0.45);
+        target.stamina = Math.min(target.maxStamina, target.stamina + 18);
+        target.energy = Math.min(target.maxEnergy, target.energy + 15);
+        if (target.team === 'player1') {
+          this.parryCount += 1;
+          this.hitstopTimer = Math.max(this.hitstopTimer, 0.055);
+          this.addCameraShake(0.16, 0.28);
+        }
+        this.rings.push({
+          x: target.x,
+          y: target.y + 0.15,
+          z: target.z,
+          radius: 0.4,
+          maxRadius: 3.4,
+          color: '#FDE047',
+          alpha: 0.96,
+          life: 0.35,
+          maxLife: 0.35,
+          growSpeed: 9.5,
+        });
+        this.spawnFloatingText(target.x, target.y + 2.5, target.z, 'صدّ مثالي!', '#FDE047', 1.32);
+        if (attacker) {
+          attacker.stunTimer = Math.max(attacker.stunTimer, 1.35);
+          const reflectDmg = Math.max(12, Math.round(rawDamage * (targetWeapon?.role === 'defense' ? 0.5 : 0.28)));
           attacker.hp = Math.max(1, attacker.hp - reflectDmg);
-          this.spawnFloatingText(attacker.x, attacker.y + 2.1, attacker.z, `انعكاس -${reflectDmg}`, '#60A5FA', 1.0);
+          this.spawnFloatingText(attacker.x, attacker.y + 2.1, attacker.z, `صدمة ارتداد -${reflectDmg}`, '#38BDF8', 1.1);
+        }
+        return;
+      }
+
+      if (target.stamina < 12) {
+        target.animState = 'hurt';
+        target.stunTimer = Math.max(target.stunTimer, 0.95);
+        target.stamina = 0;
+        target.staminaExhaustTimer = 1.25;
+        this.spawnFloatingText(target.x, target.y + 2.4, target.z, 'كسر دفاع!', '#EF4444', 1.25);
+      } else {
+        target.stamina = Math.max(0, target.stamina - 12);
+        finalDmg *= targetWeapon?.role === 'defense' ? 0.16 : 0.28;
+        audioSynth.playParry();
+        this.spawnFloatingText(target.x, target.y + 2.3, target.z, 'صدّ!', '#38BDF8', 1.12);
+        if (attacker) {
+          attacker.stunTimer = Math.max(attacker.stunTimer, targetWeapon?.role === 'defense' ? 0.85 : 0.45);
+          if (targetWeapon?.role === 'defense') {
+            const reflectDmg = Math.max(5, Math.round(rawDamage * 0.35));
+            attacker.hp = Math.max(1, attacker.hp - reflectDmg);
+            this.spawnFloatingText(attacker.x, attacker.y + 2.1, attacker.z, `انعكاس -${reflectDmg}`, '#60A5FA', 1.0);
+          }
         }
       }
     } else {
@@ -2280,6 +2949,7 @@ export class CombatSimulation {
     target.hitFlash = 1.0;
 
     if (attacker) {
+      attacker.outOfCombatTimer = 0;
       const dx = target.x - attacker.x;
       const dz = target.z - attacker.z;
       const d = Math.hypot(dx, dz) || 1;
@@ -2293,6 +2963,7 @@ export class CombatSimulation {
         this.comboTimer = 3.4;
         if (this.combo > this.maxCombo) this.maxCombo = this.combo;
         attacker.energy = Math.min(attacker.maxEnergy, attacker.energy + 8);
+        attacker.stamina = Math.min(attacker.maxStamina, attacker.stamina + 4);
         if (critical) {
           this.critsLanded += 1;
           this.opts.onCritLanded?.();
@@ -2446,9 +3117,13 @@ export class CombatSimulation {
 
   private spawnWave(waveNum: number) {
     this.wave = waveNum;
+    this.swapCharges = this.maxSwapCharges;
+    this.swapRechargeTimer = 0;
+    this.mindOverclockUsesLeft = this.maxMindOverclockUses;
     const isMagmaBossWave = waveNum === 3 || (waveNum % 3 === 0 && waveNum < 6);
     const isVoidColossusWave = waveNum >= 6 && waveNum % 3 === 0;
-    const count = this.mode === 'unified_clash' ? Math.min(7, 2 + waveNum) : Math.min(8, 3 + waveNum);
+    const eliteBonus = this.activeModifiers.includes('elite_swarm') ? 2 : 0;
+    const count = (this.mode === 'unified_clash' ? Math.min(7, 2 + waveNum) : Math.min(8, 3 + waveNum)) + eliteBonus;
 
     const pool: MonsterArchetype[] =
       waveNum === 1
@@ -2532,7 +3207,8 @@ export class CombatSimulation {
     const def = MONSTERS[archetype];
     const ang = Math.random() * Math.PI * 2;
     const dist = this.arena.radius - 3.0;
-    const scaleHp = 1 + (waveNum - 1) * 0.14;
+    const eliteHpMult = this.activeModifiers.includes('elite_swarm') ? 1.28 : 1.0;
+    const scaleHp = (1 + (waveNum - 1) * 0.14) * eliteHpMult;
     const hp = Math.round(def.maxHp * scaleHp);
     const x = Math.cos(ang) * dist;
     const z = Math.sin(ang) * dist;
@@ -2559,6 +3235,8 @@ export class CombatSimulation {
       pendingStrike: false,
       hitFlash: 0,
       frozenTimer: 0,
+      burningTimer: 0,
+      shockedTimer: 0,
       stunTimer: 0,
       isBoss: def.isBoss,
       flankSlot: slot % 5,
@@ -2583,6 +3261,12 @@ export class CombatSimulation {
     }
 
     const mult = this.arena.rewardMultiplier;
+    const modBonusPct = this.activeModifiers.reduce((acc, mId) => {
+      const m = ARENA_MODIFIERS.find((x) => x.id === mId);
+      return acc + (m ? m.rewardBonusPct : 0);
+    }, 0);
+    const modMult = 1 + (victory ? modBonusPct : modBonusPct * 0.35) / 100 + (this.lootElixirActive ? 0.35 : 0);
+
     const baseGold =
       this.mode === 'pvp_ranked'
         ? victory
@@ -2597,14 +3281,17 @@ export class CombatSimulation {
               : this.kills * 26 + this.bossKills * 150 + (victory ? 180 : 40);
 
     const p1 = this.getPlayer1();
-    const lootMult = p1?.statsDerived.lootMultiplier ?? 1;
+    const lootMult = (p1?.statsDerived.lootMultiplier ?? 1) * modMult;
     const goldEarned = Math.round((baseGold * mult + this.bonusMissionGold) * lootMult);
-    const gemsEarned =
-      this.bossKills * 9 +
-      this.missionsDone * 2 +
-      (this.mode === 'unified_clash' ? this.scoreP1 * 3 : 0) +
-      (victory && (this.mode === 'pvp_ranked' || this.mode === 'monster_raid' || this.mode === 'unified_clash') ? 10 : 0) +
-      Math.floor(this.wave / 3) * 3;
+    const gemsEarned = Math.round(
+      (this.bossKills * 9 +
+        this.missionsDone * 2 +
+        (this.mode === 'unified_clash' ? this.scoreP1 * 3 : 0) +
+        (victory && (this.mode === 'pvp_ranked' || this.mode === 'monster_raid' || this.mode === 'unified_clash') ? 10 : 0) +
+        Math.floor(this.wave / 3) * 3 +
+        (victory ? this.activeModifiers.length * 4 : 0)) *
+        (this.lootElixirActive ? 1.25 : 1)
+    );
     const xpEarned = Math.round(
       (this.kills * 24 + this.wave * 35 + this.scoreP1 * 35 + this.missionsDone * 45 + (victory ? 120 : 35)) * mult * lootMult
     );
@@ -2647,23 +3334,52 @@ export class CombatSimulation {
       opponentName: this.mode === 'pvp_ranked' ? this.rivalChampion.name : undefined,
       p1Score: this.scoreP1,
       p2Score: this.scoreP2,
+      activeModifiers: [...this.activeModifiers],
     });
   }
 
   public step(rawDt: number) {
     if (this.paused || this.finished) return;
-    const dt = Math.min(0.05, Math.max(0.001, rawDt));
-    this.fpsSamples = this.fpsSamples * 0.92 + (1 / dt) * 0.08;
+    const wallDt = Math.min(0.05, Math.max(0.001, rawDt));
+    this.fpsSamples = this.fpsSamples * 0.92 + (1 / wallDt) * 0.08;
+    const scale = Math.max(0.015, Math.min(2, this.timeScale));
+    const isQuickSwapSlowMo = this.timeScale < 0.95;
+
+    if (!isQuickSwapSlowMo && this.swapCharges < this.maxSwapCharges) {
+      this.swapRechargeTimer += wallDt;
+      if (this.swapRechargeTimer >= 18) {
+        this.swapRechargeTimer = 0;
+        this.swapCharges = Math.min(this.maxSwapCharges, this.swapCharges + 1);
+      }
+    } else if (this.swapCharges >= this.maxSwapCharges) {
+      this.swapRechargeTimer = 0;
+    }
+
+    if (this.mode === 'world_explore' && !isQuickSwapSlowMo && this.mindOverclockUsesLeft < this.maxMindOverclockUses) {
+      this.overworldOverclockRecharge += wallDt;
+      if (this.overworldOverclockRecharge >= 28) {
+        this.overworldOverclockRecharge = 0;
+        this.mindOverclockUsesLeft = Math.min(this.maxMindOverclockUses, this.mindOverclockUsesLeft + 1);
+      }
+    }
+
+    let dt = wallDt * scale;
+    let dtPlayer = dt;
+    if (!isQuickSwapSlowMo && this.mindOverclockTimer > 0) {
+      this.mindOverclockTimer = Math.max(0, this.mindOverclockTimer - wallDt);
+      dt = wallDt * 0.32;
+      dtPlayer = wallDt * 1.25;
+    }
 
     if (this.hitstopTimer > 0) {
       this.hitstopTimer -= dt;
       return;
     }
 
-    this.time += dt;
-    if (this.bannerTimer > 0) this.bannerTimer -= dt;
+    this.time += isQuickSwapSlowMo ? dt : wallDt;
+    if (this.bannerTimer > 0) this.bannerTimer -= isQuickSwapSlowMo ? dt : wallDt;
     if (this.npcDialogueTimer > 0) {
-      this.npcDialogueTimer -= dt;
+      this.npcDialogueTimer -= wallDt;
       if (this.npcDialogueTimer <= 0) this.npcDialogue = null;
     }
     if (this.comboTimer > 0) {
@@ -2671,6 +3387,57 @@ export class CombatSimulation {
       if (this.comboTimer <= 0) this.combo = 0;
     }
     if (this.shakeTimer > 0) this.shakeTimer -= dt;
+    if (this.autoHealCooldown > 0) this.autoHealCooldown = Math.max(0, this.autoHealCooldown - dtPlayer);
+    if (this.compassTimer > 0) this.compassTimer = Math.max(0, this.compassTimer - dtPlayer);
+
+    // 0b. Active Healing Wards & Elemental Burn/Shock DoT ticks
+    if (this.activeWards.length > 0) {
+      const nextWards: ActiveHealingWard[] = [];
+      for (const ward of this.activeWards) {
+        ward.life -= dt;
+        if (ward.life <= 0) continue;
+        ward.tickTimer -= dt;
+        if (ward.tickTimer <= 0) {
+          ward.tickTimer = 1.0;
+          this.rings.push({
+            x: ward.x,
+            y: ward.y + 0.08,
+            z: ward.z,
+            radius: 0.4,
+            maxRadius: ward.radius,
+            color: '#10B981',
+            alpha: 0.72,
+            life: 0.7,
+            maxLife: 0.7,
+            growSpeed: ward.radius * 1.4,
+          });
+          for (const f of this.fighters) {
+            if (f.team === ward.team && f.hp > 0 && Math.hypot(f.x - ward.x, f.z - ward.z) <= ward.radius) {
+              f.hp = Math.min(f.maxHp, f.hp + ward.healAmt);
+              f.stamina = Math.min(f.maxStamina, f.stamina + 8);
+              this.spawnFloatingText(f.x, f.y + 2.2, f.z, `+${ward.healAmt} وتد`, '#10B981', 0.95);
+            }
+          }
+        }
+        nextWards.push(ward);
+      }
+      this.activeWards = nextWards;
+    }
+
+    this.elementTickTimer += dt;
+    if (this.elementTickTimer >= 0.65) {
+      this.elementTickTimer = 0;
+      const p1 = this.getPlayer1();
+      for (const m of this.monsters) {
+        if (m.hp <= 0) continue;
+        if (m.burningTimer > 0 && p1) {
+          const burnDmg = Math.max(8, Math.round(p1.statsDerived.attackDamage * 0.25));
+          m.hp = Math.max(0, m.hp - burnDmg);
+          this.spawnFloatingText(m.x, m.y + 2.0, m.z, `حرق -${burnDmg}`, '#F97316', 0.9);
+          this.spawnBurst(m.x, m.y + 1.0, m.z, '#F97316', 4);
+        }
+      }
+    }
 
     // 0. Pending Meteors from meteor_rain power
     if (this.pendingMeteors.length > 0) {
@@ -2702,9 +3469,9 @@ export class CombatSimulation {
       this.pendingMeteors = nextMeteors;
     }
 
-    // 1. Update Fighters
+    // 1. Update Fighters (Player receives dtPlayer acceleration during Mind Overclock!)
     for (const f of this.fighters) {
-      this.updateFighter(f, dt);
+      this.updateFighter(f, f.team === 'player1' ? dtPlayer : dt);
     }
 
     // 2. Update Monsters
@@ -2728,7 +3495,7 @@ export class CombatSimulation {
       const exploreP1 = this.getPlayer1();
       if (exploreP1 && exploreP1.hp > 0) {
         this.updateOverworldStreaming(exploreP1.x, exploreP1.z);
-        this.updateOverworldExplore(exploreP1, dt);
+        this.updateOverworldExplore(exploreP1, dtPlayer);
       }
     } else if (this.mode === 'unified_clash' || this.mode === 'free_combat' || this.mode === 'monster_raid') {
       const hostileFighters = this.fighters.filter((f) => f.team === 'enemy' && f.hp > 0);
@@ -2794,7 +3561,7 @@ export class CombatSimulation {
     const p1 = this.getPlayer1();
     if (p1 && p1.hp > 0) {
       if (p1.onHighGround) {
-        this.advanceMissionProgress('highground', dt);
+        this.advanceMissionProgress('highground', dtPlayer);
       }
 
       this.pickups = this.pickups.filter((pk) => {
@@ -2876,7 +3643,7 @@ export class CombatSimulation {
 
     // 7. Update Online Network Sync (20 Hz)
     if (this.mode === 'pvp_online' && p1) {
-      this.onlineSendTimer += dt;
+      this.onlineSendTimer += wallDt;
       if (this.onlineSendTimer >= 0.05) {
         this.onlineSendTimer = 0;
         this.opts.onOnlineStateSend?.({
@@ -2894,13 +3661,16 @@ export class CombatSimulation {
       }
     }
 
-    // 8. Smooth 3D Camera Choreography
-    this.updateCamera(dt);
+    // 8. Smooth 3D Camera Choreography (responsive even during tactical slow-motion)
+    this.updateCamera(Math.max(dtPlayer, wallDt * 0.45));
   }
 
   private updateFighter(f: SimFighter, dt: number) {
     if (f.hitFlash > 0) f.hitFlash = Math.max(0, f.hitFlash - dt * 4.5);
+    if (f.parryFlash > 0) f.parryFlash = Math.max(0, f.parryFlash - dt * 2.5);
     if (f.frozenTimer > 0) f.frozenTimer = Math.max(0, f.frozenTimer - dt);
+    if (f.burningTimer > 0) f.burningTimer = Math.max(0, f.burningTimer - dt);
+    if (f.shockedTimer > 0) f.shockedTimer = Math.max(0, f.shockedTimer - dt);
     if (f.stunTimer > 0) f.stunTimer = Math.max(0, f.stunTimer - dt);
     if (f.invulnTimer > 0) f.invulnTimer = Math.max(0, f.invulnTimer - dt);
     if (f.attackCooldown > 0) f.attackCooldown = Math.max(0, f.attackCooldown - dt);
@@ -2938,7 +3708,36 @@ export class CombatSimulation {
       }
     }
 
-    f.energy = Math.min(f.maxEnergy, f.energy + f.statsDerived.energyRegen * dt);
+    // Dynamic Stamina & Mana Regeneration
+    f.energy = Math.min(f.maxEnergy, f.energy + f.statsDerived.manaRegen * dt);
+    if (f.staminaExhaustTimer > 0) {
+      f.staminaExhaustTimer = Math.max(0, f.staminaExhaustTimer - dt);
+      if (f.staminaExhaustTimer === 0) {
+        f.stamina = Math.max(f.stamina, Math.round(f.maxStamina * 0.25));
+      }
+    } else if (f.animState !== 'block' && f.dodgeTimer <= 0) {
+      f.stamina = Math.min(f.maxStamina, f.stamina + f.statsDerived.staminaRegen * dt);
+    }
+
+    // Out-of-Combat HP regen from VIT threshold
+    f.outOfCombatTimer += dt;
+    if (f.outOfCombatTimer >= 4.0 && f.statsDerived.outOfCombatHpRegen > 0) {
+      f.hp = Math.min(f.maxHp, f.hp + f.statsDerived.outOfCombatHpRegen * dt);
+    }
+
+    // Smart Auto-Heal below 25% HP if enabled
+    if (
+      f.team === 'player1' &&
+      this.autoDrinkHeal &&
+      this.autoHealCooldown <= 0 &&
+      !this.activeModifiers.includes('no_potions') &&
+      f.hp < f.maxHp * 0.25 &&
+      (this.localConsumables.elixir_heal || 0) > 0
+    ) {
+      this.autoHealCooldown = 4.0;
+      this.triggerConsumable('elixir_heal');
+    }
+
     f.animTime += dt;
 
     // Terrain zone & elevation detection
@@ -2951,7 +3750,7 @@ export class CombatSimulation {
     }
 
     f.onHighGround = groundY > 0.25;
-    let zoneSpeedMult = 1.0;
+    let zoneSpeedMult = this.compassTimer > 0 && f.team === 'player1' ? 1.25 : 1.0;
     f.terrainNote = f.onHighGround ? 'مرتفع تكتيكي (+12% ضرر)' : '';
 
     if (this.mode === 'world_explore' && Math.hypot(f.x, f.z) <= 22) {
@@ -3030,34 +3829,48 @@ export class CombatSimulation {
 
     let targetBank = 0;
     if (f.stunTimer <= 0 && f.dodgeTimer <= 0) {
-      if (blocking && !f.isAirborne) {
+      if (blocking && !f.isAirborne && f.staminaExhaustTimer <= 0 && f.stamina > 1) {
+        f.blockHoldTimer += dt;
+        f.stamina = Math.max(0, f.stamina - 8 * dt);
+        if (f.stamina <= 0) f.staminaExhaustTimer = 1.15;
         f.animState = 'block';
         f.vx *= Math.pow(0.04, dt);
         f.vz *= Math.pow(0.04, dt);
-      } else if (Math.abs(moveX) > 0.01 || Math.abs(moveZ) > 0.01) {
-        const sp = f.statsDerived.moveSpeed * speedMult;
-        const accel = f.isAirborne ? 13.5 : 17.5;
-        f.vx += (moveX * sp - f.vx) * Math.min(1, dt * accel);
-        f.vz += (moveZ * sp - f.vz) * Math.min(1, dt * accel);
-        const desiredYaw = Math.atan2(moveX, moveZ);
-        let diffYaw = desiredYaw - f.yaw;
-        while (diffYaw > Math.PI) diffYaw -= Math.PI * 2;
-        while (diffYaw < -Math.PI) diffYaw += Math.PI * 2;
-        if (f.animState !== 'attack' && f.animState !== 'heavy' && f.animState !== 'power') {
-          f.yaw += diffYaw * (1 - Math.exp(-16 * dt));
-          f.animState = 'run';
-          targetBank = Math.max(-0.26, Math.min(0.26, diffYaw * 0.42));
-        }
-        f.walkPhase += dt * (sp / 5.6) * (f.isAirborne ? 0.35 : 1);
       } else {
-        const damp = f.isAirborne ? 0.35 : 0.008;
-        f.vx *= Math.pow(damp, dt);
-        f.vz *= Math.pow(damp, dt);
-        if (f.animState === 'run' || f.animState === 'block') {
-          f.animState = 'idle';
+        f.blockHoldTimer = 0;
+        if (Math.abs(moveX) > 0.01 || Math.abs(moveZ) > 0.01) {
+          if (f.team === 'player1' && this.sprintActive && this.mode !== 'world_explore') {
+            f.stamina = Math.max(0, f.stamina - 7.5 * dt);
+            if (f.stamina <= 0) {
+              f.staminaExhaustTimer = 1.15;
+              this.sprintActive = false;
+            }
+          }
+          const sp = f.statsDerived.moveSpeed * speedMult;
+          const accel = f.isAirborne ? 13.5 : 17.5;
+          f.vx += (moveX * sp - f.vx) * Math.min(1, dt * accel);
+          f.vz += (moveZ * sp - f.vz) * Math.min(1, dt * accel);
+          const desiredYaw = Math.atan2(moveX, moveZ);
+          let diffYaw = desiredYaw - f.yaw;
+          while (diffYaw > Math.PI) diffYaw -= Math.PI * 2;
+          while (diffYaw < -Math.PI) diffYaw += Math.PI * 2;
+          if (f.animState !== 'attack' && f.animState !== 'heavy' && f.animState !== 'power') {
+            f.yaw += diffYaw * (1 - Math.exp(-16 * dt));
+            f.animState = 'run';
+            targetBank = Math.max(-0.26, Math.min(0.26, diffYaw * 0.42));
+          }
+          f.walkPhase += dt * (sp / 5.6) * (f.isAirborne ? 0.35 : 1);
+        } else {
+          const damp = f.isAirborne ? 0.35 : 0.008;
+          f.vx *= Math.pow(damp, dt);
+          f.vz *= Math.pow(damp, dt);
+          if (f.animState === 'run' || f.animState === 'block') {
+            f.animState = 'idle';
+          }
         }
       }
     } else {
+      f.blockHoldTimer = 0;
       f.vx *= Math.pow(0.25, dt);
       f.vz *= Math.pow(0.25, dt);
     }
@@ -3077,7 +3890,7 @@ export class CombatSimulation {
     f.z += f.vz * dt;
     this.constrainToArena(f);
 
-    // Smooth vertical platform stepping + airborne jump gravity + landing squash
+    // Smooth vertical platform stepping + airborne jump gravity + landing squash / Aerial Slam impact
     const targetGround = this.getTerrainHeight(f.x, f.z);
     if (f.vy > 0 || f.y > targetGround + 0.03) {
       f.isAirborne = true;
@@ -3088,7 +3901,30 @@ export class CombatSimulation {
         f.y = targetGround;
         f.vy = 0;
         f.isAirborne = false;
-        if (prevVy < -2.6) {
+        if (f.isAerialSlamming) {
+          f.isAerialSlamming = false;
+          const slamDmg = Math.round(f.statsDerived.heavyDamage * 1.15);
+          const col = f.avatar.slashColor || (WEAPONS[f.avatar.weaponId]?.energyColor || '#38BDF8');
+          this.rings.push({
+            x: f.x,
+            y: targetGround + 0.1,
+            z: f.z,
+            radius: 0.5,
+            maxRadius: 4.4,
+            color: col,
+            alpha: 0.96,
+            life: 0.4,
+            maxLife: 0.4,
+            growSpeed: 11.5,
+          });
+          this.spawnBurst(f.x, targetGround + 0.5, f.z, col, 16);
+          this.applyRadialDamage(f, f.x, f.z, 4.4, slamDmg, 9.5, true);
+          this.spawnFloatingText(f.x, f.y + 2.5, f.z, 'ضربة السقوط!', '#FDE047', 1.25);
+          if (f.team === 'player1') {
+            this.addCameraShake(0.2, 0.34);
+            audioSynth.playPower();
+          }
+        } else if (prevVy < -2.6) {
           f.squash = 0.78;
           f.squashTimer = 0.18;
           this.spawnBurst(f.x, targetGround + 0.1, f.z, '#CBD5E1', 5);
@@ -3099,6 +3935,7 @@ export class CombatSimulation {
       }
     } else {
       f.isAirborne = false;
+      f.isAerialSlamming = false;
       f.y += (targetGround - f.y) * Math.min(1, dt * 14);
     }
 
@@ -3195,6 +4032,8 @@ export class CombatSimulation {
   private updateMonster(m: SimMonster, dt: number) {
     if (m.hitFlash > 0) m.hitFlash = Math.max(0, m.hitFlash - dt * 4.5);
     if (m.frozenTimer > 0) m.frozenTimer = Math.max(0, m.frozenTimer - dt);
+    if (m.burningTimer > 0) m.burningTimer = Math.max(0, m.burningTimer - dt);
+    if (m.shockedTimer > 0) m.shockedTimer = Math.max(0, m.shockedTimer - dt);
     if (m.stunTimer > 0) m.stunTimer = Math.max(0, m.stunTimer - dt);
     if (m.attackTimer > 0) m.attackTimer = Math.max(0, m.attackTimer - dt);
     if (m.attackCooldown > 0) m.attackCooldown = Math.max(0, m.attackCooldown - dt);
@@ -3206,7 +4045,8 @@ export class CombatSimulation {
     const dx = p1.x - m.x;
     const dz = p1.z - m.z;
     const dist = Math.hypot(dx, dz) || 1;
-    const speedMult = (m.frozenTimer > 0 ? 0.42 : 1.0) * (m.enraged ? 1.25 : 1.0);
+    const frenzyMult = this.activeModifiers.includes('frenzy') ? 1.28 : 1.0;
+    const speedMult = (m.frozenTimer > 0 ? 0.42 : 1.0) * (m.enraged ? 1.25 : 1.0) * frenzyMult;
 
     // Overworld leash: don't aggro from across the continent or chase player into Haven Safe Village
     if (this.mode === 'world_explore') {
@@ -3300,7 +4140,7 @@ export class CombatSimulation {
         m.vx *= Math.pow(0.08, dt);
         m.vz *= Math.pow(0.08, dt);
         if (m.attackCooldown <= 0) {
-          const cdMult = m.enraged ? 0.76 : 1.0;
+          const cdMult = (m.enraged ? 0.76 : 1.0) * (this.activeModifiers.includes('frenzy') ? 0.75 : 1.0);
           if (def.isRanged) {
             m.attackCooldown = 1.75 * cdMult;
             m.attackTimer = 0.25;
@@ -3733,6 +4573,12 @@ export class CombatSimulation {
         focusX = (p1.x + opp.x) * 0.5;
         focusZ = (p1.z + opp.z) * 0.5;
       }
+    } else {
+      const locked = this.getLockedTarget();
+      if (locked) {
+        focusX = p1.x * 0.78 + locked.x * 0.22;
+        focusZ = p1.z * 0.78 + locked.z * 0.22;
+      }
     }
 
     let baseDist = 11.8;
@@ -3854,6 +4700,10 @@ export class CombatSimulation {
       worldEventZones: this.mode === 'world_explore' ? WORLD_EVENT_ZONES : undefined,
       completedWorldEventIds: Array.from(this.completedWorldEventIds),
       activeEventZoneId: this.activeEventZone?.def.id,
+      lockedTargetPos: (() => {
+        const lt = this.getLockedTarget();
+        return lt ? { x: lt.x, y: lt.y, z: lt.z, radius: lt.radius } : null;
+      })(),
     };
   }
 
@@ -3863,17 +4713,27 @@ export class CombatSimulation {
     const boss = this.monsters.find((m) => m.isBoss && m.hp > 0);
     const cdr = p1 ? p1.statsDerived.cooldownReduction : 0;
     const netBonus = computeSkillNetworkBonuses(this.unlockedNetworkNodes);
-    const slots = p1?.avatar.powerSlots || [
+    const primarySlots: PowerSlots = p1?.avatar.powerSlots || [
       p1?.avatar.powerId || 'inferno_nova',
       p1?.avatar.secondaryPowerId || 'holy_sanctuary',
       'thunder_strike',
       'shadow_blink',
     ];
+    const secondarySlots: PowerSlots = p1?.avatar.secondaryPowerSlots || [
+      primarySlots[2],
+      primarySlots[3],
+      primarySlots[0],
+      primarySlots[1],
+    ];
+    const slots: PowerSlots = this.activeDeckIndex === 1 ? secondarySlots : primarySlots;
     const calcSlotMax = (sIdx: 0 | 1 | 2 | 3) => {
       const pId = slots[sIdx];
       const lv = this.powerLevels[pId] || 1;
-      const factor = Math.max(0.35, 1 - cdr - netBonus.cdrMult - (lv - 1) * 0.06);
-      return Number(((POWERS[pId]?.cooldown || 6) * factor).toFixed(1));
+      const rune = this.equippedRunes[pId] || 'standard';
+      const runeCdMult = rune === 'haste' ? 0.75 : 1.0;
+      const pDef = resolvePowerDef(pId, this.customSkills);
+      const factor = Math.max(0.35, (1 - cdr - netBonus.cdrMult - (lv - 1) * 0.06) * runeCdMult);
+      return Number(Math.max(0.4, pDef.cooldown * factor).toFixed(1));
     };
     const slotMaxCooldowns: [number, number, number, number] = [
       calcSlotMax(0),
@@ -3953,26 +4813,48 @@ export class CombatSimulation {
     const activeEventRem = this.activeEventZone
       ? this.monsters.filter((m) => m.hp > 0 && m.eventZoneId === this.activeEventZone!.def.id).length
       : 0;
+    const locked = this.getLockedTarget();
 
     return {
       hp: p1 ? Math.round(p1.hp) : 0,
       maxHp: p1 ? p1.maxHp : 100,
       energy: p1 ? Math.round(p1.energy) : 0,
       maxEnergy: p1 ? p1.maxEnergy : 100,
+      mana: p1 ? Math.round(p1.energy) : 0,
+      maxMana: p1 ? p1.maxEnergy : 100,
+      stamina: p1 ? Math.round(p1.stamina) : 0,
+      maxStamina: p1 ? p1.maxStamina : 100,
+      staminaExhausted: p1 ? p1.staminaExhaustTimer > 0 : false,
       wave: this.wave,
       kills: this.kills,
       combo: this.combo,
       comboTimer: this.comboTimer,
+      parryCount: this.parryCount,
       heavyCd: p1 ? Number(p1.heavyCooldown.toFixed(1)) : 0,
-      heavyMaxCd: Number((4.2 * (1 - cdr)).toFixed(1)),
+      heavyMaxCd: Number((0.95 * (1 - cdr)).toFixed(1)),
       powerCd: slotCooldowns[0],
       powerMaxCd: slotMaxCooldowns[0],
       secondaryCd: slotCooldowns[1],
       secondaryMaxCd: slotMaxCooldowns[1],
       slotCooldowns,
       slotMaxCooldowns,
+      slotPowers: slots,
+      primarySlotPowers: primarySlots,
+      secondarySlotPowers: secondarySlots,
+      activeDeckIndex: this.activeDeckIndex,
+      timeScale: this.timeScale,
+      swapCharges: this.swapCharges,
+      maxSwapCharges: this.maxSwapCharges,
+      swapRechargeSec:
+        this.swapCharges < this.maxSwapCharges ? Math.max(1, Math.ceil(18 - this.swapRechargeTimer)) : 0,
+      swapBlockedReason: this.getSwapBlockedReason(),
+      mindOverclockSec: Number(this.mindOverclockTimer.toFixed(1)),
+      mindOverclockUsesLeft: this.mindOverclockUsesLeft,
       dodgeCd: p1 ? Number(p1.dodgeCooldown.toFixed(1)) : 0,
       sprintActive: this.sprintActive,
+      lockedTargetName: locked?.name,
+      lockedTargetHpRatio: locked ? Math.max(0, Math.min(1, locked.hp / Math.max(1, locked.maxHp))) : undefined,
+      activeModifiers: [...this.activeModifiers],
       playerX: p1 ? Math.round(p1.x) : 0,
       playerZ: p1 ? Math.round(p1.z) : 0,
       scoreP1: this.scoreP1,

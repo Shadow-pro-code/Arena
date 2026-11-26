@@ -43,7 +43,11 @@ export type KeyActionId =
   | 'toggleHud'
   | 'potion1'
   | 'potion2'
-  | 'potion3';
+  | 'potion3'
+  | 'potion4'
+  | 'quickSwap'
+  | 'swapDeck'
+  | 'lockOn';
 
 export type KeyBindingsConfig = Record<KeyActionId, string>;
 
@@ -64,6 +68,7 @@ export interface HudCustomizationConfig {
   hudScale: number;
   hudOpacity: number;
   cameraSensitivity?: number;
+  autoDrinkHeal?: boolean;
   mobilePreset: MobileLayoutPreset;
   mobileButtonsScale: number;
   joystickOffset: { x: number; y: number };
@@ -134,7 +139,21 @@ export type WeaponId =
 
 export type SystemTheme = 'royal_cyan' | 'crimson_abyss';
 
-export type PowerId =
+export type WarriorRank = 'E' | 'D' | 'C' | 'B' | 'A' | 'S' | 'SS';
+
+export type SkillElement = 'fire' | 'frost' | 'lightning' | 'void' | 'light' | 'earth';
+
+export type SkillMotionKind = 'aoe_burst' | 'dash_strike' | 'sky_rain' | 'beam' | 'sanctuary_ward';
+
+export type SkillRuneId = 'standard' | 'expand' | 'siphon' | 'haste';
+
+export type MaterialFinish = 'matte' | 'metallic' | 'runic';
+
+export type GearSetId = 'dragon' | 'bastion' | 'arcane' | 'wind';
+
+export type ArenaModifierId = 'frenzy' | 'no_potions' | 'elite_swarm' | 'glass_cannon';
+
+export type BasePowerId =
   | 'inferno_nova'
   | 'thunder_strike'
   | 'crystal_aegis'
@@ -145,10 +164,13 @@ export type PowerId =
   | 'holy_sanctuary'
   | 'iron_fortress'
   | 'arcane_beam'
+  | 'mind_overclock'
   | 'fusion_plasma_tempest'
   | 'fusion_eternal_glacier'
   | 'fusion_void_eclipse'
   | 'fusion_dragon_bastion';
+
+export type PowerId = BasePowerId | (string & {});
 
 export type GearSlot = 'relic' | 'armor_core' | 'boots';
 
@@ -163,7 +185,14 @@ export type GearId =
   | 'gauntlet_fury'
   | 'greaves_titan';
 
-export type ConsumableId = 'elixir_heal' | 'scroll_energy' | 'tonic_fury';
+export type ConsumableId =
+  | 'elixir_heal'
+  | 'scroll_energy'
+  | 'tonic_fury'
+  | 'stun_bomb'
+  | 'healing_ward'
+  | 'loot_elixir'
+  | 'treasure_compass';
 
 export type MonsterArchetype =
   | 'ash_stalker'
@@ -196,12 +225,16 @@ export interface AvatarConfig {
   primaryColor: string;
   secondaryColor: string;
   accentColor: string;
+  materialFinish?: MaterialFinish;
+  slashColor?: string;
   backGear: BackGearStyle;
   auraStyle: AuraStyle;
   weaponId: WeaponId;
   powerId: PowerId;
   secondaryPowerId: PowerId;
   powerSlots: PowerSlots;
+  secondaryPowerSlots?: PowerSlots;
+  activeDeckIndex?: 0 | 1;
   stats: AvatarStats;
 }
 
@@ -239,12 +272,69 @@ export interface PowerDef {
   damage: number;
   radius: number;
   color: string;
+  element?: SkillElement;
+  motionKind?: SkillMotionKind;
+  secondaryColor?: string;
+  secondaryElement?: SkillElement;
   costGold: number;
   costGems: number;
   isFusion?: boolean;
+  isCustom?: boolean;
+  basePair?: [PowerId, PowerId];
   fusionPair?: [PowerId, PowerId];
   fusionCostGold?: number;
   fusionCostMarks?: number;
+  statRequirements?: Partial<AvatarStats>;
+  requiredLevel?: number;
+  maxUsesPerWave?: number;
+  createdAt?: number;
+}
+
+export type CustomSkillDef = PowerDef & {
+  isCustom: true;
+  element: SkillElement;
+  motionKind: SkillMotionKind;
+  secondaryElement: SkillElement;
+  secondaryColor: string;
+  basePair: [PowerId, PowerId];
+  createdAt: number;
+};
+
+export interface SkillRuneDef {
+  id: SkillRuneId;
+  name: string;
+  shortDesc: string;
+  color: string;
+  costGold: number;
+  costMarks: number;
+}
+
+export interface GearSetDef {
+  id: GearSetId;
+  name: string;
+  accentColor: string;
+  bonus2Label: string;
+  bonus3Label: string;
+}
+
+export interface CraftingRecipeDef {
+  id: string;
+  name: string;
+  description: string;
+  resultKind: 'consumable' | 'sharpening_stone';
+  resultConsumableId?: ConsumableId;
+  resultQty: number;
+  costGold: number;
+  costResources: Partial<Record<OverworldNodeKind, number>>;
+  color: string;
+}
+
+export interface AvatarLoadoutSlot {
+  name: string;
+  avatar: AvatarConfig;
+  equippedGear: Record<GearSlot, GearId | null>;
+  equippedRunes: Record<string, SkillRuneId>;
+  savedAt: number;
 }
 
 export interface SkillNetworkNodeDef {
@@ -286,6 +376,7 @@ export interface GearDef {
   name: string;
   slot: GearSlot;
   slotLabel: string;
+  setId: GearSetId;
   description: string;
   hpBonus: number;
   dmgBonus: number;
@@ -648,10 +739,17 @@ export interface PlayerProfile {
   weaponLevels: Partial<Record<WeaponId, number>>;
   unlockedPowers: PowerId[];
   powerLevels: Partial<Record<PowerId, number>>;
+  customSkills: CustomSkillDef[];
+  unlockedRunes: SkillRuneId[];
+  equippedRunes: Record<string, SkillRuneId>;
   unlockedSkillSlots: 1 | 2 | 3 | 4;
   unlockedNetworkNodes: string[];
   unlockedGear: GearId[];
+  gearLevels: Partial<Record<GearId, number>>;
   equippedGear: Record<GearSlot, GearId | null>;
+  loadouts: (AvatarLoadoutSlot | null)[];
+  sharpeningStones: number;
+  claimedCodexRegions: string[];
   consumables: Record<ConsumableId, number>;
   monsterKillsByType: Partial<Record<MonsterArchetype, number>>;
   claimedChallenges: string[];
@@ -701,6 +799,7 @@ export interface MatchResult {
   xpEarned: number;
   ratingDelta: number;
   missionsDone: number;
+  activeModifiers?: ArenaModifierId[];
   monsterKillsByType?: Partial<Record<MonsterArchetype, number>>;
   opponentName?: string;
   p1Score?: number;

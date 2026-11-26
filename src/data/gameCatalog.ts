@@ -2,15 +2,22 @@ import type {
   AchievementDef,
   ArenaDef,
   ArenaId,
+  ArenaModifierId,
   AvatarConfig,
+  BasePowerId,
   ConsumableDef,
   ConsumableId,
+  CraftingRecipeDef,
+  CustomSkillDef,
   DailyChallengeDef,
   DailyChallengeProgress,
   GearDef,
   GearId,
+  GearSetDef,
+  GearSetId,
   GearSlot,
   MapChallengeDef,
+  MaterialFinish,
   MonsterArchetype,
   MonsterDef,
   NpcJobDef,
@@ -21,8 +28,13 @@ import type {
   RivalChampion,
   SceneryPropDef,
   SecretBossDef,
+  SkillElement,
+  SkillMotionKind,
   SkillNetworkNodeDef,
+  SkillRuneDef,
+  SkillRuneId,
   TitleDef,
+  WarriorRank,
   WeaponDef,
   WeaponId,
   WorldEventZoneDef,
@@ -278,18 +290,20 @@ export const WEAPONS: Record<WeaponId, WeaponDef> = {
 
 export const WEAPON_LIST: WeaponDef[] = Object.values(WEAPONS);
 
-export const POWERS: Record<PowerId, PowerDef> = {
+export const POWERS: Record<BasePowerId, PowerDef> = {
   inferno_nova: {
     id: 'inferno_nova',
     name: 'موجة اللهب',
     role: 'melee',
     tagline: 'انفجار ناري محيطي',
     description: 'تطلق حلقة نار ثلاثية الأبعاد حولك تدفع كل الخصوم وتلحق بهم ضرراً حارقاً.',
-    cooldown: 7.5,
-    energyCost: 35,
+    cooldown: 0.85,
+    energyCost: 30,
     damage: 54,
     radius: 6.0,
     color: '#F97316',
+    element: 'fire',
+    motionKind: 'aoe_burst',
     costGold: 0,
     costGems: 0,
   },
@@ -299,11 +313,13 @@ export const POWERS: Record<PowerId, PowerDef> = {
     role: 'magic',
     tagline: 'برق متسلسل وصعق',
     description: 'تستدعي صواعق ثلاثية الأبعاد تضرب أقرب ثلاثة خصوم وتشل حركتهم مؤقتاً.',
-    cooldown: 8.5,
-    energyCost: 40,
+    cooldown: 0.9,
+    energyCost: 34,
     damage: 58,
     radius: 9.5,
     color: '#38BDF8',
+    element: 'lightning',
+    motionKind: 'sky_rain',
     costGold: 0,
     costGems: 0,
   },
@@ -313,13 +329,16 @@ export const POWERS: Record<PowerId, PowerDef> = {
     role: 'defense',
     tagline: 'حماية وارتداد ضرر',
     description: 'يحيط الأفتار بدرع بلوري دوّار يمتص 65% من الضرر لـ 5 ثوانٍ ويعيد شحن الصحة.',
-    cooldown: 11,
-    energyCost: 35,
+    cooldown: 1.0,
+    energyCost: 32,
     damage: 24,
     radius: 3.8,
     color: '#10B981',
+    element: 'earth',
+    motionKind: 'sanctuary_ward',
     costGold: 340,
     costGems: 0,
+    statRequirements: { def: 7, vit: 7 },
   },
   shadow_blink: {
     id: 'shadow_blink',
@@ -327,11 +346,13 @@ export const POWERS: Record<PowerId, PowerDef> = {
     role: 'melee',
     tagline: 'اختراق سريع وحرج',
     description: 'تندفع لمسافة بعيدة مخترقاً كل الخصوم في طريقك بضربة قاطعة فورية.',
-    cooldown: 6.5,
-    energyCost: 30,
+    cooldown: 0.7,
+    energyCost: 26,
     damage: 50,
     radius: 7.0,
     color: '#94A3B8',
+    element: 'void',
+    motionKind: 'dash_strike',
     costGold: 420,
     costGems: 0,
   },
@@ -341,13 +362,17 @@ export const POWERS: Record<PowerId, PowerDef> = {
     role: 'magic',
     tagline: 'تجميد وإبطاء جماعي',
     description: 'إعصار جليدي ثلاثي الأبعاد يجمّد الوحوش والمنافسين ويبطئهم لـ 4 ثوانٍ.',
-    cooldown: 9,
-    energyCost: 38,
+    cooldown: 0.9,
+    energyCost: 34,
     damage: 46,
     radius: 6.8,
     color: '#60A5FA',
+    element: 'frost',
+    motionKind: 'aoe_burst',
     costGold: 560,
     costGems: 8,
+    statRequirements: { int: 8, dex: 7 },
+    requiredLevel: 2,
   },
   titan_overdrive: {
     id: 'titan_overdrive',
@@ -355,13 +380,17 @@ export const POWERS: Record<PowerId, PowerDef> = {
     role: 'melee',
     tagline: 'تضخم جسدي وقوة فائقة',
     description: 'يتضخم أفتارك بهالة ذهبية لـ 7 ثوانٍ مع +55% ضرر واستعادة صحة مع كل ضربة.',
-    cooldown: 14,
-    energyCost: 45,
+    cooldown: 1.1,
+    energyCost: 42,
     damage: 34,
     radius: 4.5,
     color: '#E59A24',
+    element: 'earth',
+    motionKind: 'sanctuary_ward',
     costGold: 780,
     costGems: 15,
+    statRequirements: { str: 11, vit: 9 },
+    requiredLevel: 3,
   },
   meteor_rain: {
     id: 'meteor_rain',
@@ -369,13 +398,17 @@ export const POWERS: Record<PowerId, PowerDef> = {
     role: 'magic',
     tagline: 'قصف سحري واسع النطاق',
     description: 'يسقط 4 نيازك متفجرة متتالية على الخصوم المحيطين بضرر ناري مدمر وموجات صدمة.',
-    cooldown: 11.5,
-    energyCost: 42,
+    cooldown: 1.05,
+    energyCost: 38,
     damage: 66,
     radius: 8.5,
     color: '#FB7185',
+    element: 'fire',
+    motionKind: 'sky_rain',
     costGold: 740,
     costGems: 12,
+    statRequirements: { int: 11, spr: 8 },
+    requiredLevel: 3,
   },
   holy_sanctuary: {
     id: 'holy_sanctuary',
@@ -383,11 +416,13 @@ export const POWERS: Record<PowerId, PowerDef> = {
     role: 'support',
     tagline: 'دعم واستشفاء + طاقة',
     description: 'يشفي 34% من الصحة فوراً ويدفع الأعداء للخلف مع منحك سرعة وشحن طاقة إضافي.',
-    cooldown: 10.5,
-    energyCost: 32,
+    cooldown: 0.95,
+    energyCost: 30,
     damage: 28,
     radius: 5.5,
     color: '#34D399',
+    element: 'light',
+    motionKind: 'sanctuary_ward',
     costGold: 450,
     costGems: 0,
   },
@@ -397,13 +432,17 @@ export const POWERS: Record<PowerId, PowerDef> = {
     role: 'defense',
     tagline: 'صمود مطلق وانعكاس',
     description: 'يفعّل درع الحصن مع مناعة قصيرة ضد الضربات وصدمة أرضية تقذف كل خصم قريب.',
-    cooldown: 12,
-    energyCost: 36,
+    cooldown: 1.0,
+    energyCost: 34,
     damage: 42,
     radius: 5.2,
     color: '#60A5FA',
+    element: 'earth',
+    motionKind: 'sanctuary_ward',
     costGold: 520,
     costGems: 0,
+    statRequirements: { def: 10, vit: 8 },
+    requiredLevel: 2,
   },
   arcane_beam: {
     id: 'arcane_beam',
@@ -411,13 +450,37 @@ export const POWERS: Record<PowerId, PowerDef> = {
     role: 'magic',
     tagline: 'قفزة وطاقة مركزة',
     description: 'يطلق وابلاً مركزاً من الكرات السحرية الموجهة التي تصيب الخصوم من مسافات بعيدة.',
-    cooldown: 8.0,
-    energyCost: 35,
+    cooldown: 0.85,
+    energyCost: 32,
     damage: 60,
     radius: 12.0,
     color: '#A78BFA',
+    element: 'void',
+    motionKind: 'beam',
     costGold: 620,
     costGems: 8,
+    statRequirements: { int: 9, spr: 8 },
+    requiredLevel: 2,
+  },
+  mind_overclock: {
+    id: 'mind_overclock',
+    name: 'تسريع التفكير الذهني',
+    role: 'magic',
+    tagline: 'إدراك خارق يبطئ العالم 32%',
+    description: 'يرفع تركيزك الذهني لـ 4 ثوانٍ فيتباطأ الأعداء والمقذوفات إلى 32% وتزداد سرعتك، بحد أقصى مرتين لكل موجة (تبريد 22ث).',
+    cooldown: 22.0,
+    energyCost: 65,
+    damage: 28,
+    radius: 13.0,
+    color: '#22D3EE',
+    secondaryColor: '#A855F7',
+    element: 'lightning',
+    motionKind: 'sanctuary_ward',
+    costGold: 1350,
+    costGems: 28,
+    statRequirements: { int: 12, spr: 10 },
+    requiredLevel: 4,
+    maxUsesPerWave: 2,
   },
   fusion_plasma_tempest: {
     id: 'fusion_plasma_tempest',
@@ -425,17 +488,23 @@ export const POWERS: Record<PowerId, PowerDef> = {
     role: 'magic',
     tagline: 'مهارة مدمجة: لهب + صاعقة',
     description: 'تدمج موجة اللهب مع صاعقة السماء لإطلاق انفجار بلازمي مزدوج وصواعق متسلسلة تصعق الأعداء.',
-    cooldown: 9.5,
+    cooldown: 1.0,
     energyCost: 42,
     damage: 94,
     radius: 8.5,
     color: '#FB923C',
+    secondaryColor: '#38BDF8',
+    element: 'fire',
+    secondaryElement: 'lightning',
+    motionKind: 'aoe_burst',
     costGold: 0,
     costGems: 0,
     isFusion: true,
     fusionPair: ['inferno_nova', 'thunder_strike'],
     fusionCostGold: 680,
     fusionCostMarks: 16,
+    statRequirements: { int: 10, str: 8 },
+    requiredLevel: 3,
   },
   fusion_eternal_glacier: {
     id: 'fusion_eternal_glacier',
@@ -443,17 +512,23 @@ export const POWERS: Record<PowerId, PowerDef> = {
     role: 'support',
     tagline: 'مهارة مدمجة: صقيع + ملاذ الضوء',
     description: 'تشفي 42% من صحتك وتمنحك درعاً فورياً مع زوبعة جليدية تجمّد الخصوم المحيطين 5 ثوانٍ.',
-    cooldown: 11.0,
+    cooldown: 1.1,
     energyCost: 38,
     damage: 68,
     radius: 7.5,
     color: '#2DD4BF',
+    secondaryColor: '#60A5FA',
+    element: 'frost',
+    secondaryElement: 'light',
+    motionKind: 'sanctuary_ward',
     costGold: 0,
     costGems: 0,
     isFusion: true,
     fusionPair: ['frost_vortex', 'holy_sanctuary'],
     fusionCostGold: 740,
     fusionCostMarks: 18,
+    statRequirements: { spr: 10, vit: 9 },
+    requiredLevel: 3,
   },
   fusion_void_eclipse: {
     id: 'fusion_void_eclipse',
@@ -461,17 +536,23 @@ export const POWERS: Record<PowerId, PowerDef> = {
     role: 'melee',
     tagline: 'مهارة مدمجة: اندفاع الظل + شعاع الهاوية',
     description: 'اندفاعة فائقة السرعة عبر الأبعاد تطلق معها رشقة أثيرية موجهة تضاعف الضربات الحرجة.',
-    cooldown: 8.2,
+    cooldown: 0.85,
     energyCost: 36,
     damage: 88,
     radius: 9.5,
     color: '#C084FC',
+    secondaryColor: '#F0ABFC',
+    element: 'void',
+    secondaryElement: 'void',
+    motionKind: 'dash_strike',
     costGold: 0,
     costGems: 0,
     isFusion: true,
     fusionPair: ['shadow_blink', 'arcane_beam'],
     fusionCostGold: 820,
     fusionCostMarks: 22,
+    statRequirements: { agi: 11, dex: 10 },
+    requiredLevel: 4,
   },
   fusion_dragon_bastion: {
     id: 'fusion_dragon_bastion',
@@ -479,23 +560,207 @@ export const POWERS: Record<PowerId, PowerDef> = {
     role: 'defense',
     tagline: 'مهارة مدمجة: مطر النيازك + حصن الحديد',
     description: 'تفعّل درعاً منيعاً مع هبوط 5 نيازك تنينية ساحقة تحولك لقلعة متحركة.',
-    cooldown: 12.5,
+    cooldown: 1.15,
     energyCost: 46,
     damage: 98,
     radius: 9.2,
     color: '#F43F5E',
+    secondaryColor: '#F59E0B',
+    element: 'fire',
+    secondaryElement: 'earth',
+    motionKind: 'sky_rain',
     costGold: 0,
     costGems: 0,
     isFusion: true,
     fusionPair: ['meteor_rain', 'iron_fortress'],
     fusionCostGold: 950,
     fusionCostMarks: 26,
+    statRequirements: { def: 12, int: 10 },
+    requiredLevel: 4,
   },
 };
 
 export const POWER_LIST: PowerDef[] = Object.values(POWERS);
 export const CORE_POWER_LIST: PowerDef[] = POWER_LIST.filter((p) => !p.isFusion);
 export const FUSION_POWER_LIST: PowerDef[] = POWER_LIST.filter((p) => p.isFusion);
+
+export function resolvePowerDef(id: PowerId, customSkills: CustomSkillDef[] = []): PowerDef {
+  if (id in POWERS) {
+    return POWERS[id as BasePowerId];
+  }
+  const found = customSkills.find((s) => s.id === id);
+  if (found) return found;
+  return POWERS.inferno_nova;
+}
+
+const STAT_SHORT_AR: Record<StatKey, string> = {
+  str: 'قوة',
+  agi: 'سرعة',
+  vit: 'حيوية',
+  int: 'ذكاء',
+  def: 'دفاع',
+  dex: 'دقة',
+  spr: 'روح',
+  lck: 'حظ',
+};
+
+export function checkPowerRequirements(
+  power: PowerDef,
+  stats: AvatarStats,
+  playerLevel: number
+): { met: boolean; missingLabels: string[]; allLabels: string[] } {
+  const missingLabels: string[] = [];
+  const allLabels: string[] = [];
+  if (power.requiredLevel && power.requiredLevel > 1) {
+    const lbl = `مستوى ${power.requiredLevel}`;
+    allLabels.push(lbl);
+    if (playerLevel < power.requiredLevel) {
+      missingLabels.push(`${lbl} (حالي ${playerLevel})`);
+    }
+  }
+  if (power.statRequirements) {
+    (Object.keys(power.statRequirements) as StatKey[]).forEach((k) => {
+      const req = power.statRequirements![k] || 0;
+      if (req <= 0) return;
+      const lbl = `${STAT_SHORT_AR[k]} ${req}`;
+      allLabels.push(lbl);
+      if ((stats[k] || 1) < req) {
+        missingLabels.push(`${lbl} (حالي ${stats[k] || 1})`);
+      }
+    });
+  }
+  return { met: missingLabels.length === 0, missingLabels, allLabels };
+}
+
+export const RANK_META: Record<
+  WarriorRank,
+  { rank: WarriorRank; label: string; color: string; bg: string; border: string; perkDesc: string }
+> = {
+  E: { rank: 'E', label: 'رتبة E · مبتدئ', color: '#94A3B8', bg: 'rgba(148,163,184,0.14)', border: 'rgba(148,163,184,0.35)', perkDesc: 'كفاءة أساسية قياسية' },
+  D: { rank: 'D', label: 'رتبة D · مجنّد', color: '#34D399', bg: 'rgba(52,211,153,0.14)', border: 'rgba(52,211,153,0.35)', perkDesc: '+6% ضرر وإتقان' },
+  C: { rank: 'C', label: 'رتبة C · مبارز', color: '#38BDF8', bg: 'rgba(56,189,248,0.14)', border: 'rgba(56,189,248,0.38)', perkDesc: '+12% ضرر و+4% مدى' },
+  B: { rank: 'B', label: 'رتبة B · فارس', color: '#A78BFA', bg: 'rgba(167,139,250,0.15)', border: 'rgba(167,139,250,0.4)', perkDesc: '+18% ضرر واختراق دفاع' },
+  A: { rank: 'A', label: 'رتبة A · نخبة', color: '#F59E0B', bg: 'rgba(245,158,11,0.16)', border: 'rgba(245,158,11,0.45)', perkDesc: '+25% ضرر وخفض تكلفة' },
+  S: { rank: 'S', label: 'رتبة S · أسطوري', color: '#FB7185', bg: 'rgba(251,113,133,0.18)', border: 'rgba(251,113,133,0.5)', perkDesc: '+34% ضرر ورنين عنصري' },
+  SS: { rank: 'SS', label: 'رتبة SS · خارق', color: '#FDE047', bg: 'rgba(253,224,71,0.2)', border: 'rgba(253,224,71,0.6)', perkDesc: '+45% سيادة مطلقة' },
+};
+
+const RANK_LADDER: WarriorRank[] = ['E', 'D', 'C', 'B', 'A', 'S', 'SS'];
+
+export function getWeaponRank(weaponId: WeaponId, level = 1): WarriorRank {
+  const def = WEAPONS[weaponId];
+  const tierOffset = def && (def.costGems >= 12 || def.costGold >= 900) ? 2 : def && def.costGold >= 450 ? 1 : 0;
+  const idx = Math.min(RANK_LADDER.length - 1, Math.max(0, level - 1 + tierOffset));
+  return RANK_LADDER[idx];
+}
+
+export function getPowerRank(powerId: PowerId, level = 1, customSkills: CustomSkillDef[] = []): WarriorRank {
+  const def = resolvePowerDef(powerId, customSkills);
+  const fusionOffset = def.isFusion || def.isCustom ? 2 : def.costGems > 0 ? 1 : 0;
+  const idx = Math.min(RANK_LADDER.length - 1, Math.max(0, level - 1 + fusionOffset));
+  return RANK_LADDER[idx];
+}
+
+export function getGearRank(gearId: GearId, level = 1): WarriorRank {
+  const def = GEAR_ITEMS[gearId];
+  const tierOffset = def && def.costGems > 0 ? 1 : 0;
+  const idx = Math.min(RANK_LADDER.length - 1, Math.max(0, level - 1 + tierOffset));
+  return RANK_LADDER[idx];
+}
+
+export const ELEMENT_META: Record<SkillElement, { label: string; color: string; statusLabel: string }> = {
+  fire: { label: 'لهب حارق', color: '#F97316', statusLabel: 'حرق مستمر' },
+  frost: { label: 'صقيع متجمد', color: '#60A5FA', statusLabel: 'تجميد وإبطاء' },
+  lightning: { label: 'صاعقة برق', color: '#38BDF8', statusLabel: 'صعق وشلل' },
+  void: { label: 'هاوية وظل', color: '#C084FC', statusLabel: 'اختراق وحرجة' },
+  light: { label: 'نور شافٍ', color: '#34D399', statusLabel: 'تطهير واستشفاء' },
+  earth: { label: 'زلزال وصلابة', color: '#F59E0B', statusLabel: 'ارتجاج ودرع' },
+};
+
+export const SYNTHESIS_GEOMETRY_META: Record<SkillMotionKind, { label: string; desc: string }> = {
+  aoe_burst: { label: 'انفجار حلقي محيطي', desc: 'موجة صدمة دائرية تدفع وتضرب كل خصم حول البطل' },
+  dash_strike: { label: 'اندفاع قاطع خاطف', desc: 'اندفاعة فائقة تخترق الصفوف مع حصانة لحظية' },
+  sky_rain: { label: 'قصف سماوي متتابع', desc: 'سقوط نيازك وصواعق من السماء على عدة أهداف' },
+  beam: { label: 'وابل طاقة موجه', desc: 'إطلاق مقذوفات مركزة تتعقب الأعداء من بعيد' },
+  sanctuary_ward: { label: 'هالة حماية ودعم', desc: 'تحصين واستعادة صحة أو مانا مع دفع الخصوم' },
+};
+
+export function synthesizeCustomSkill(
+  skillA: PowerDef,
+  skillB: PowerDef,
+  customName: string
+): CustomSkillDef {
+  const motionKind: SkillMotionKind = skillA.motionKind || 'aoe_burst';
+  const element: SkillElement = skillB.element || 'fire';
+  const secondaryElement: SkillElement = skillA.element || 'lightning';
+  const trimmedName = customName.trim().slice(0, 32) || `${skillA.name.split(' ')[0]} ${ELEMENT_META[element].label}`;
+  const avgDamage = Math.round((skillA.damage + skillB.damage) * 0.78);
+  const maxRadius = Number(Math.max(skillA.radius, skillB.radius, 6.2).toFixed(1));
+  const avgMana = Math.max(24, Math.min(54, Math.round((skillA.energyCost + skillB.energyCost) * 0.56)));
+  const id = `custom_${skillA.id}_${skillB.id}_${Date.now().toString(36).slice(-4)}`;
+
+  return {
+    id,
+    name: trimmedName,
+    role: skillA.role === 'support' || skillB.role === 'support' ? 'support' : skillA.role,
+    tagline: `مهارة مدمجة: ${SYNTHESIS_GEOMETRY_META[motionKind].label} · ${ELEMENT_META[element].label}`,
+    description: `دمج فريد يجمع حركة «${skillA.name}» مع عنصر «${ELEMENT_META[element].label}» من «${skillB.name}».`,
+    cooldown: 0.95,
+    energyCost: avgMana,
+    damage: avgDamage,
+    radius: maxRadius,
+    color: skillB.color || ELEMENT_META[element].color,
+    secondaryColor: skillA.color || '#FDE047',
+    element,
+    secondaryElement,
+    motionKind,
+    costGold: 0,
+    costGems: 0,
+    isFusion: true,
+    isCustom: true,
+    basePair: [skillA.id, skillB.id],
+    fusionCostGold: 520,
+    fusionCostMarks: 12,
+    createdAt: Date.now(),
+  };
+}
+
+export const SKILL_RUNES: Record<SkillRuneId, SkillRuneDef> = {
+  standard: {
+    id: 'standard',
+    name: 'رونة متوازنة',
+    shortDesc: 'الأداء القياسي للمهارة بدون تعديل',
+    color: '#94A3B8',
+    costGold: 0,
+    costMarks: 0,
+  },
+  expand: {
+    id: 'expand',
+    name: 'رونة الاتساع',
+    shortDesc: '+25% مدى التأثير · +15% مانا',
+    color: '#38BDF8',
+    costGold: 260,
+    costMarks: 6,
+  },
+  siphon: {
+    id: 'siphon',
+    name: 'رونة الامتصاص',
+    shortDesc: 'تعيد +12% صحة و+10 ستامينا عند الإصابة',
+    color: '#10B981',
+    costGold: 340,
+    costMarks: 9,
+  },
+  haste: {
+    id: 'haste',
+    name: 'رونة التدفق',
+    shortDesc: '-22% تكلفة مانا و-25% تأخير الإلقاء',
+    color: '#F59E0B',
+    costGold: 360,
+    costMarks: 10,
+  },
+};
+
+export const SKILL_RUNE_LIST: SkillRuneDef[] = Object.values(SKILL_RUNES);
 
 export const SKILL_SLOT_UNLOCK_COSTS: Record<
   2 | 3 | 4,
@@ -662,13 +927,45 @@ export const QUICK_CHAT_PHRASES: string[] = [
   'من يريد مبارزة 1 ضد 1؟',
 ];
 
+export const GEAR_SETS: Record<GearSetId, GearSetDef> = {
+  dragon: {
+    id: 'dragon',
+    name: 'طقم التنين الفتّاك',
+    accentColor: '#EF4444',
+    bonus2Label: '+15% ضرر الهجوم والمهارات',
+    bonus3Label: '+18% حاسمة + 5% امتصاص صحة',
+  },
+  bastion: {
+    id: 'bastion',
+    name: 'طقم الحصن المنيع',
+    accentColor: '#60A5FA',
+    bonus2Label: '+90 صحة و+8% درع',
+    bonus3Label: 'نافذة صدّ مثالي +0.12ث +18% تجديد ستامينا',
+  },
+  arcane: {
+    id: 'arcane',
+    name: 'طقم الأثير والرياح',
+    accentColor: '#38BDF8',
+    bonus2Label: '+25 مانا قصوى و+20% تعافي مانا',
+    bonus3Label: '+16% مدى المهارات و+10% سرعة حركة',
+  },
+  wind: {
+    id: 'wind',
+    name: 'طقم الريح الخاطف',
+    accentColor: '#2DD4BF',
+    bonus2Label: '+12% سرعة ومراوغة',
+    bonus3Label: '+20% تعافي ستامينا',
+  },
+};
+
 export const GEAR_ITEMS: Record<GearId, GearDef> = {
   ring_vitality: {
     id: 'ring_vitality',
     name: 'خاتم الحياة المتجددة',
     slot: 'relic',
     slotLabel: 'تميمة / خاتم',
-    description: 'يزيد أقصى صحة +55 ويعزز تجديد الطاقة في المعارك الطويلة.',
+    setId: 'bastion',
+    description: 'يزيد أقصى صحة +55 ويعزز تجديد الطاقة والستامينا في المعارك الطويلة.',
     hpBonus: 55,
     dmgBonus: 0,
     speedBonus: 0,
@@ -684,6 +981,7 @@ export const GEAR_ITEMS: Record<GearId, GearDef> = {
     name: 'قلادة الحكمة السحرية',
     slot: 'relic',
     slotLabel: 'تميمة / خاتم',
+    setId: 'arcane',
     description: 'ترفع قوة المهارات والقدرات الخارقة +20% وتزيد الطاقة الحرجة.',
     hpBonus: 15,
     dmgBonus: 4,
@@ -700,6 +998,7 @@ export const GEAR_ITEMS: Record<GearId, GearDef> = {
     name: 'خاتم عين الصقر',
     slot: 'relic',
     slotLabel: 'تميمة / خاتم',
+    setId: 'dragon',
     description: 'يمنح +12% فرصة ضربة حاسمة و+7 ضرر هجومي مباشر.',
     hpBonus: 0,
     dmgBonus: 7,
@@ -716,6 +1015,7 @@ export const GEAR_ITEMS: Record<GearId, GearDef> = {
     name: 'نواة الحصن المدرعة',
     slot: 'armor_core',
     slotLabel: 'نواة الدرع',
+    setId: 'bastion',
     description: 'تضيف +8% تقليل ضرر و+45 صحة لمواجهة الزعماء.',
     hpBonus: 45,
     dmgBonus: 0,
@@ -732,6 +1032,7 @@ export const GEAR_ITEMS: Record<GearId, GearDef> = {
     name: 'حراشف التنين الملتهب',
     slot: 'armor_core',
     slotLabel: 'نواة الدرع',
+    setId: 'dragon',
     description: 'تدمج الصلابة بالهجومية: +60 صحة، +8 ضرر، و+5% درع.',
     hpBonus: 60,
     dmgBonus: 8,
@@ -748,6 +1049,7 @@ export const GEAR_ITEMS: Record<GearId, GearDef> = {
     name: 'وشاح الأثير المبارك',
     slot: 'armor_core',
     slotLabel: 'نواة الدرع',
+    setId: 'arcane',
     description: 'يوازن الدفاع (+6%) مع تعزيز قوة الشفاء والسحر (+15%).',
     hpBonus: 35,
     dmgBonus: 3,
@@ -764,6 +1066,7 @@ export const GEAR_ITEMS: Record<GearId, GearDef> = {
     name: 'خفّ الريح الخاطف',
     slot: 'boots',
     slotLabel: 'حذاء وقفاز قتالي',
+    setId: 'arcane',
     description: 'يزيد سرعة الحركة +1.1 والضربة الحاسمة +6% للمناورة حول الوحوش.',
     hpBonus: 0,
     dmgBonus: 2,
@@ -780,6 +1083,7 @@ export const GEAR_ITEMS: Record<GearId, GearDef> = {
     name: 'قفاز القبضة الذهبية',
     slot: 'boots',
     slotLabel: 'حذاء وقفاز قتالي',
+    setId: 'dragon',
     description: 'يرفع ضرر السلاح الأساسي +11 ويزيد سرعة الحركة +0.4.',
     hpBonus: 15,
     dmgBonus: 11,
@@ -796,6 +1100,7 @@ export const GEAR_ITEMS: Record<GearId, GearDef> = {
     name: 'ساقية العمالقة الثقيلة',
     slot: 'boots',
     slotLabel: 'حذاء وقفاز قتالي',
+    setId: 'bastion',
     description: 'تمنح +80 صحة و+7% درع صلب لثبات أسطوري داخل الساحة.',
     hpBonus: 80,
     dmgBonus: 4,
@@ -821,21 +1126,158 @@ export const CONSUMABLES: Record<ConsumableId, ConsumableDef> = {
   },
   scroll_energy: {
     id: 'scroll_energy',
-    name: 'لفيفة الطاقة الفورية',
-    description: 'تشحن الطاقة 100% وتلغي نصف وقت انتظار القوى الخارقة.',
+    name: 'لفيفة الستامينا والمانا',
+    description: 'تملأ شريط الستامينا والمانا 100% فوراً وتُزيل الإجهاد.',
     costGold: 85,
     color: '#38BDF8',
   },
   tonic_fury: {
     id: 'tonic_fury',
     name: 'إكسير غضب المعركة',
-    description: 'يفعّل هالة التضخم (+55% ضرر وسرعة) لمدة 6 ثوانٍ.',
+    description: 'يفعّل هالة التضخم (+55% ضرر وسرعة) لمدة 6.5 ثوانٍ.',
     costGold: 110,
     color: '#F59E0B',
+  },
+  stun_bomb: {
+    id: 'stun_bomb',
+    name: 'قنبلة الصعق التكتيكية',
+    description: 'انفجار صاعق محيطي يشل الأعداء المحيطين 2.4 ثانية ويلحق ضرراً كهربائياً.',
+    costGold: 120,
+    color: '#38BDF8',
+  },
+  healing_ward: {
+    id: 'healing_ward',
+    name: 'شمعة التجديد المقدسة',
+    description: 'تزرع هالة شفاء أرضية تدوم 6 ثوانٍ وتعالجك تدريجياً داخل نطاقها.',
+    costGold: 135,
+    color: '#34D399',
+  },
+  loot_elixir: {
+    id: 'loot_elixir',
+    name: 'إكسير الكنز والحظ',
+    description: 'يرفع غنائم الذهب والخبرة بنسبة +35% طوال المعركة الحالية.',
+    costGold: 160,
+    color: '#FDE047',
+  },
+  treasure_compass: {
+    id: 'treasure_compass',
+    name: 'بوصلة الكنوز والأحداث',
+    description: 'تكشف اتجاه أقرب صندوق أو حدث في إيثيريا وتمنح دفعة سرعة لحظية.',
+    costGold: 95,
+    color: '#A78BFA',
   },
 };
 
 export const CONSUMABLE_LIST: ConsumableDef[] = Object.values(CONSUMABLES);
+
+export const CRAFTING_RECIPES: CraftingRecipeDef[] = [
+  {
+    id: 'craft_sharpening_stone',
+    name: 'حجر صقل النصل',
+    description: 'يموّل ترقية واحدة لأي سلاح أو سامان مجاناً دون دفع ذهب.',
+    resultKind: 'sharpening_stone',
+    resultQty: 1,
+    costGold: 120,
+    costResources: { ore: 3, crystal: 1 },
+    color: '#E6B85C',
+  },
+  {
+    id: 'craft_elixir_heal',
+    name: 'جرعة شفاء ملكية (×2)',
+    description: 'استخلاص أعشاب القارة لإنتاج جرعتي استشفاء سريع.',
+    resultKind: 'consumable',
+    resultConsumableId: 'elixir_heal',
+    resultQty: 2,
+    costGold: 45,
+    costResources: { herb: 3 },
+    color: '#10B981',
+  },
+  {
+    id: 'craft_stun_bomb',
+    name: 'قنبلة صعق تكتيكية (×2)',
+    description: 'شحن بلورات البرق مع خام المعادن لصناعة قنبلتي صعق.',
+    resultKind: 'consumable',
+    resultConsumableId: 'stun_bomb',
+    resultQty: 2,
+    costGold: 75,
+    costResources: { ore: 2, crystal: 2 },
+    color: '#38BDF8',
+  },
+  {
+    id: 'craft_healing_ward',
+    name: 'شمعة تجديد مقدسة (×2)',
+    description: 'مزيج الأعشاب والبلورات لإنتاج هالتي استشفاء ميدانية.',
+    resultKind: 'consumable',
+    resultConsumableId: 'healing_ward',
+    resultQty: 2,
+    costGold: 85,
+    costResources: { herb: 2, crystal: 2 },
+    color: '#34D399',
+  },
+  {
+    id: 'craft_loot_elixir',
+    name: 'إكسير الكنز والحظ (×1)',
+    description: 'جرعة نادرة ترفع عوائد الغنائم في الساحات والغارات.',
+    resultKind: 'consumable',
+    resultConsumableId: 'loot_elixir',
+    resultQty: 1,
+    costGold: 90,
+    costResources: { herb: 2, ore: 1, crystal: 2 },
+    color: '#FDE047',
+  },
+];
+
+export const ARENA_MODIFIERS: {
+  id: ArenaModifierId;
+  name: string;
+  desc: string;
+  rewardBonusPct: number;
+  color: string;
+}[] = [
+  {
+    id: 'frenzy',
+    name: 'هيجان الوحوش',
+    desc: 'الوحوش أسرع +22% وأشرس · +45% غنائم إضافية',
+    rewardBonusPct: 45,
+    color: '#F97316',
+  },
+  {
+    id: 'no_potions',
+    name: 'تحدي بلا جرعات',
+    desc: 'ممنوع استخدام الجرعات أثناء المعركة · +55% غنائم',
+    rewardBonusPct: 55,
+    color: '#EF4444',
+  },
+  {
+    id: 'elite_swarm',
+    name: 'حشد النخبة',
+    desc: '+45% صحة للوحوش وظهور إضافي · +65% غنائم',
+    rewardBonusPct: 65,
+    color: '#A855F7',
+  },
+  {
+    id: 'glass_cannon',
+    name: 'المدفع الزجاجي',
+    desc: 'ضرر الجميع ×1.85 (معارك خاطفة) · +85% غنائم',
+    rewardBonusPct: 85,
+    color: '#FDE047',
+  },
+];
+
+export const MATERIAL_FINISH_OPTIONS: { id: MaterialFinish; label: string; desc: string }[] = [
+  { id: 'matte', label: 'مطفي حربي', desc: 'درع عملي بدون لمعان' },
+  { id: 'metallic', label: 'فولاذ مصقول', desc: 'انعكاس معدني فاخر' },
+  { id: 'runic', label: 'أثيري روني', desc: 'توهّج سحري خفيف على الحواف' },
+];
+
+export const SLASH_COLOR_OPTIONS: { label: string; color: string }[] = [
+  { label: 'لون السلاح التلقائي', color: '' },
+  { label: 'ذهبي ملكي', color: '#FDE047' },
+  { label: 'أزرق برق', color: '#38BDF8' },
+  { label: 'قرمزي ناري', color: '#FB7185' },
+  { label: 'أرجواني هاوية', color: '#C084FC' },
+  { label: 'زمردي أثيري', color: '#34D399' },
+];
 
 export const ARENAS: Record<ArenaId, ArenaDef & { id: ArenaId }> = {
   obsidian_citadel: {
@@ -2305,6 +2747,8 @@ export const DEFAULT_AVATAR: AvatarConfig = {
   powerId: 'inferno_nova',
   secondaryPowerId: 'holy_sanctuary',
   powerSlots: ['inferno_nova', 'holy_sanctuary', 'thunder_strike', 'shadow_blink'],
+  secondaryPowerSlots: ['thunder_strike', 'shadow_blink', 'inferno_nova', 'holy_sanctuary'],
+  activeDeckIndex: 0,
   stats: {
     str: 6,
     agi: 5,
@@ -2574,10 +3018,28 @@ export const INITIAL_QUESTS: QuestProgress[] = [
   },
 ];
 
+export const STAT_BREAKPOINTS_INFO: {
+  key: keyof AvatarConfig['stats'];
+  label: string;
+  formulaDesc: string;
+  exampleBonus: string;
+}[] = [
+  { key: 'str', label: 'القوة (STR)', formulaDesc: '+2.2 ضرر + دفع +1.8%/نقطة', exampleBonus: 'تأثير ارتداد وضربات أثقل' },
+  { key: 'agi', label: 'الرشاقة (AGI)', formulaDesc: '+0.2 سرعة + قفز +2.4% + مراوغة أبعد', exampleBonus: 'قفزة أعلى ومسافة دحرجة أوسع' },
+  { key: 'vit', label: 'الحيوية (VIT)', formulaDesc: '+18 صحة + 1.4 ستامينا/ث + تجديد خارج القتال', exampleBonus: 'تحمل أطول للصدّ والركض' },
+  { key: 'int', label: 'الذكاء (INT)', formulaDesc: '+7.5% قوة مهارات + مدى +1.6% + +0.85 مانا/ث', exampleBonus: 'حجم انفجار أوسع وتعافي أسرع' },
+  { key: 'def', label: 'الدفاع (DEF)', formulaDesc: '+1.6% درع + نافذة صدّ مثالي أطول', exampleBonus: 'يعكس الصدّ المثالي دون ضرر' },
+  { key: 'dex', label: 'البراعة (DEX)', formulaDesc: '+2.2% سرعة ضرب + +1.1 تعافي ستامينا/ث', exampleBonus: 'إنهاء كومبو أسرع وتعب أقل' },
+  { key: 'spr', label: 'الروح (SPR)', formulaDesc: '+6 مانا قصوى + +1.35 مانا/ث', exampleBonus: 'إلقاء مهارات متواصل بلا توقف' },
+  { key: 'lck', label: 'الحظ (LCK)', formulaDesc: '+1.35% حاسمة + مضاعف ضرر حرج + موارد مضاعفة', exampleBonus: 'ضربات حاسمة مدمرة وغنائم أغنى' },
+];
+
 export function computeFighterDerivedStats(
   avatar: AvatarConfig,
   weaponLevel = 1,
-  equippedGear?: Record<GearSlot, GearId | null>
+  equippedGear?: Record<GearSlot, GearId | null>,
+  gearLevels?: Partial<Record<GearId, number>>,
+  unlockedNetworkNodes?: string[]
 ) {
   const weapon = WEAPONS[avatar.weaponId] || WEAPONS.vanguard_sword;
   const st = avatar.stats;
@@ -2591,43 +3053,112 @@ export function computeFighterDerivedStats(
   let gearArmor = 0;
   let gearCrit = 0;
   let gearPwrScale = 0;
+  const setCounts: Record<GearSetId, number> = { dragon: 0, bastion: 0, arcane: 0, wind: 0 };
 
   if (equippedGear) {
     (['relic', 'armor_core', 'boots'] as GearSlot[]).forEach((slot) => {
       const gId = equippedGear[slot];
       if (gId && GEAR_ITEMS[gId]) {
         const g = GEAR_ITEMS[gId];
-        gearHp += g.hpBonus;
-        gearDmg += g.dmgBonus;
-        gearSpeed += g.speedBonus;
-        gearArmor += g.armorBonus;
-        gearCrit += g.critBonus;
-        gearPwrScale += g.pwrScaleBonus;
+        const gLv = gearLevels?.[gId] || 1;
+        const gScale = 1 + (gLv - 1) * 0.16;
+        gearHp += Math.round(g.hpBonus * gScale);
+        gearDmg += Math.round(g.dmgBonus * gScale);
+        gearSpeed += Number((g.speedBonus * (1 + (gLv - 1) * 0.08)).toFixed(2));
+        gearArmor += g.armorBonus * (1 + (gLv - 1) * 0.1);
+        gearCrit += Math.round(g.critBonus * gScale);
+        gearPwrScale += g.pwrScaleBonus * gScale;
+        if (g.setId) setCounts[g.setId] += 1;
       }
     });
   }
 
+  const activeSetBonuses: { setId: GearSetId; count: number; name: string; label: string }[] = [];
+  let setDmgMult = 1;
+  let setCritBonus = 0;
+  let setLifestealPct = 0;
+  let setHpBonus = 0;
+  let setArmorBonus = 0;
+  let setParryBonus = 0;
+  let setStaminaRegenMult = 1;
+  let setManaBonus = 0;
+  let setManaRegenMult = 1;
+  let setRadiusMult = 1;
+  let setSpeedMult = 1;
+
+  if (setCounts.dragon >= 2) {
+    setDmgMult += 0.15;
+    activeSetBonuses.push({ setId: 'dragon', count: setCounts.dragon, name: GEAR_SETS.dragon.name, label: GEAR_SETS.dragon.bonus2Label });
+  }
+  if (setCounts.dragon >= 3) {
+    setCritBonus += 18;
+    setLifestealPct += 0.05;
+    activeSetBonuses.push({ setId: 'dragon', count: setCounts.dragon, name: GEAR_SETS.dragon.name, label: GEAR_SETS.dragon.bonus3Label });
+  }
+  if (setCounts.bastion >= 2) {
+    setHpBonus += 90;
+    setArmorBonus += 0.08;
+    activeSetBonuses.push({ setId: 'bastion', count: setCounts.bastion, name: GEAR_SETS.bastion.name, label: GEAR_SETS.bastion.bonus2Label });
+  }
+  if (setCounts.bastion >= 3) {
+    setParryBonus += 0.12;
+    setStaminaRegenMult += 0.18;
+    activeSetBonuses.push({ setId: 'bastion', count: setCounts.bastion, name: GEAR_SETS.bastion.name, label: GEAR_SETS.bastion.bonus3Label });
+  }
+  if (setCounts.arcane >= 2) {
+    setManaBonus += 25;
+    setManaRegenMult += 0.2;
+    activeSetBonuses.push({ setId: 'arcane', count: setCounts.arcane, name: GEAR_SETS.arcane.name, label: GEAR_SETS.arcane.bonus2Label });
+  }
+  if (setCounts.arcane >= 3) {
+    setRadiusMult += 0.16;
+    setSpeedMult += 0.1;
+    activeSetBonuses.push({ setId: 'arcane', count: setCounts.arcane, name: GEAR_SETS.arcane.name, label: GEAR_SETS.arcane.bonus3Label });
+  }
+
+  const netBonus = unlockedNetworkNodes ? computeSkillNetworkBonuses(unlockedNetworkNodes) : null;
   const levelMult = 1 + (weaponLevel - 1) * 0.16;
-  const maxHp = Math.round(140 + (st.vit || 5) * 18 + (st.def || 5) * 4 + buildHpBonus + gearHp);
+  const maxHp = Math.round(140 + (st.vit || 5) * 18 + (st.def || 5) * 4 + buildHpBonus + gearHp + setHpBonus);
   const magicBonus = weapon.role === 'magic' || weapon.role === 'support' ? (st.int || 5) * 1.9 : (st.int || 5) * 0.6;
   const attackDamage = Math.round(
-    weapon.damage * levelMult + (st.str || 5) * 2.2 + magicBonus + buildDamageBonus + gearDmg
+    (weapon.damage * levelMult + (st.str || 5) * 2.2 + magicBonus + buildDamageBonus + gearDmg) * setDmgMult
   );
   const heavyDamage = Math.round(
-    weapon.heavyDamage * levelMult + (st.str || 5) * 3.1 + magicBonus * 1.25 + buildDamageBonus * 1.4 + gearDmg * 1.3
+    (weapon.heavyDamage * levelMult + (st.str || 5) * 3.1 + magicBonus * 1.25 + buildDamageBonus * 1.4 + gearDmg * 1.3) * setDmgMult
   );
-  const moveSpeed = Number((6.3 + (st.agi || 5) * 0.2 + (st.dex || 5) * 0.06 + buildSpeedBonus + gearSpeed).toFixed(2));
-  const critChance = Math.min(75, Math.round(weapon.critBonus + (st.agi || 5) * 0.9 + (st.lck || 4) * 1.35 + gearCrit));
-  const powerScale = Number((1 + (st.int || 5) * 0.075 + (st.spr || 5) * 0.025 + gearPwrScale).toFixed(2));
-  const maxEnergy = Math.round(95 + (st.spr || 5) * 4);
-  const energyRegen = Number((8.5 + (st.spr || 5) * 0.95 + (weapon.role === 'support' ? 3.5 : 0)).toFixed(1));
+  const moveSpeed = Number(
+    ((6.3 + (st.agi || 5) * 0.2 + (st.dex || 5) * 0.06 + buildSpeedBonus + gearSpeed) * setSpeedMult).toFixed(2)
+  );
+  const critChance = Math.min(82, Math.round(weapon.critBonus + (st.agi || 5) * 0.9 + (st.lck || 4) * 1.35 + gearCrit + setCritBonus));
+  const critMult = Number((1.6 + Math.min(0.65, (st.lck || 4) * 0.025)).toFixed(2));
+  const powerScale = Number(((1 + (st.int || 5) * 0.075 + (st.spr || 5) * 0.025 + gearPwrScale) * setDmgMult).toFixed(2));
+
+  // Dual-Resource Economy: Stamina (Physical maneuvers) + Mana (Skills/Spells)
+  const maxStamina = Math.round(90 + (st.vit || 5) * 5 + (st.agi || 5) * 2 + (avatar.build === 'heavy' ? 10 : 0));
+  const staminaRegen = Number(
+    ((18 + (st.vit || 5) * 1.4 + (st.dex || 5) * 1.1) * setStaminaRegenMult).toFixed(1)
+  );
+  const maxMana = Math.round(95 + (st.spr || 5) * 6 + (st.int || 5) * 2 + setManaBonus + (netBonus ? netBonus.bonusEnergy : 0));
+  const manaRegen = Number(
+    ((10.5 + (st.spr || 5) * 1.35 + (st.int || 5) * 0.85 + (weapon.role === 'support' ? 4.0 : 0)) * setManaRegenMult).toFixed(1)
+  );
+
   const armorReduction = Math.min(
-    0.62,
-    0.04 + (st.def || 5) * 0.016 + (st.vit || 5) * 0.005 + (avatar.build === 'heavy' ? 0.05 : 0) + (weapon.armorBonus || 0) + gearArmor
+    0.66,
+    0.04 + (st.def || 5) * 0.016 + (st.vit || 5) * 0.005 + (avatar.build === 'heavy' ? 0.05 : 0) + (weapon.armorBonus || 0) + gearArmor + setArmorBonus
   );
-  const attackSpeedMult = Number((1 + Math.min(0.45, (st.dex || 5) * 0.022)).toFixed(2));
-  const cooldownReduction = Number(Math.min(0.32, (st.dex || 5) * 0.015).toFixed(2));
+  const attackSpeedMult = Number((1 + Math.min(0.55, (st.dex || 5) * 0.022)).toFixed(2));
+  const cooldownReduction = Number(Math.min(0.36, (st.dex || 5) * 0.015).toFixed(2));
   const lootMultiplier = Number((1 + (st.lck || 4) * 0.035).toFixed(2));
+
+  // Tangible Physical & Tactical Stat Perks
+  const knockbackMult = Number((1 + (st.str || 5) * 0.018).toFixed(2));
+  const jumpHeightMult = Number((1 + Math.min(0.38, (st.agi || 5) * 0.022)).toFixed(2));
+  const dodgeDistMult = Number((1 + Math.min(0.45, (st.agi || 5) * 0.025)).toFixed(2));
+  const parryWindowSec = Number(Math.min(0.46, 0.22 + (st.def || 5) * 0.009 + setParryBonus).toFixed(2));
+  const powerRadiusMult = Number(((1 + Math.min(0.4, (st.int || 5) * 0.016)) * setRadiusMult).toFixed(2));
+  const outOfCombatHpRegen = Number(((st.vit || 5) * 0.55).toFixed(1));
+  const resourceYieldMult = Number((1 + (st.lck || 4) * 0.04).toFixed(2));
 
   return {
     maxHp,
@@ -2635,13 +3166,27 @@ export function computeFighterDerivedStats(
     heavyDamage,
     moveSpeed,
     critChance,
+    critMult,
     powerScale,
-    maxEnergy,
-    energyRegen,
+    maxStamina,
+    staminaRegen,
+    maxMana,
+    manaRegen,
+    maxEnergy: maxMana,
+    energyRegen: manaRegen,
     armorReduction,
     attackSpeedMult,
     cooldownReduction,
     lootMultiplier,
+    knockbackMult,
+    jumpHeightMult,
+    dodgeDistMult,
+    parryWindowSec,
+    powerRadiusMult,
+    outOfCombatHpRegen,
+    resourceYieldMult,
+    setLifestealPct,
+    activeSetBonuses,
   };
 }
 

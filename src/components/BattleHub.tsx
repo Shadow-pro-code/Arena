@@ -23,6 +23,7 @@ import {
 import type {
   AppDestination,
   ArenaId,
+  ArenaModifierId,
   CameraViewMode,
   DeviceMode,
   GameMode,
@@ -33,11 +34,14 @@ import type {
 import {
   ARENAS,
   ARENA_LIST,
+  ARENA_MODIFIERS,
   OVERWORLD_MAP,
-  POWERS,
+  RANK_META,
   WEAPONS,
   computeFighterDerivedStats,
   getRankLabel,
+  getWeaponRank,
+  resolvePowerDef,
   xpForNextLevel,
 } from '../data/gameCatalog';
 import {
@@ -54,9 +58,11 @@ interface BattleHubProps {
   profile: PlayerProfile;
   selectedArena: ArenaId;
   selectedMode: GameMode;
+  selectedModifiers?: ArenaModifierId[];
   onlinePlayers: number;
   onSelectArena: (arenaId: ArenaId) => void;
   onSelectMode: (mode: GameMode) => void;
+  onToggleModifier?: (id: ArenaModifierId) => void;
   onStartCombat: (mode: GameMode, arenaId: ArenaId) => void;
   onNavigate: (dest: AppDestination) => void;
   onOpenStory: () => void;
@@ -109,9 +115,11 @@ export const BattleHub: React.FC<BattleHubProps> = ({
   profile,
   selectedArena,
   selectedMode,
+  selectedModifiers = [],
   onlinePlayers,
   onSelectArena,
   onSelectMode,
+  onToggleModifier,
   onStartCombat,
   onNavigate,
   onOpenStory,
@@ -142,9 +150,21 @@ export const BattleHub: React.FC<BattleHubProps> = ({
   const weapon = WEAPONS[profile.avatar.weaponId];
   const equippedGearCount = Object.values(profile.equippedGear).filter(Boolean).length;
   const weaponLv = profile.weaponLevels[profile.avatar.weaponId] || 1;
-  const derived = computeFighterDerivedStats(profile.avatar, weaponLv, profile.equippedGear);
+  const weaponRank = getWeaponRank(profile.avatar.weaponId, weaponLv);
+  const weaponRankMeta = RANK_META[weaponRank];
+  const derived = computeFighterDerivedStats(
+    profile.avatar,
+    weaponLv,
+    profile.equippedGear,
+    profile.gearLevels,
+    profile.unlockedNetworkNodes
+  );
   const nextXp = xpForNextLevel(profile.level);
   const xpPct = Math.min(100, Math.round((profile.xp / nextXp) * 100));
+  const modifierBonusPct = selectedModifiers.reduce((acc, mId) => {
+    const def = ARENA_MODIFIERS.find((m) => m.id === mId);
+    return acc + (def ? def.rewardBonusPct : 0);
+  }, 0);
 
   return (
     <main className="ui-shell-container space-y-[var(--ui-section-gap)]">
@@ -406,7 +426,20 @@ export const BattleHub: React.FC<BattleHubProps> = ({
                   </span>
                   <span>·</span>
                   <span>
-                    السلاح: <strong className="text-[#E6B85C]">{weapon.name} (م{weaponLv})</strong>
+                    السلاح:{' '}
+                    <strong className="text-[#E6B85C]">
+                      {weapon.name} (م{weaponLv})
+                    </strong>
+                    <span
+                      className="mr-1.5 px-1.5 py-0.5 rounded text-[10px] font-bold font-mono-num border"
+                      style={{
+                        color: weaponRankMeta.color,
+                        backgroundColor: weaponRankMeta.bg,
+                        borderColor: weaponRankMeta.border,
+                      }}
+                    >
+                      {weaponRank}
+                    </span>
                   </span>
                   <span>·</span>
                   <span>
@@ -423,7 +456,7 @@ export const BattleHub: React.FC<BattleHubProps> = ({
               </div>
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
                 {profile.avatar.powerSlots.map((pId, idx) => {
-                  const pw = POWERS[pId];
+                  const pw = resolvePowerDef(pId, profile.customSkills);
                   const isUnlockedSlot = idx < profile.unlockedSkillSlots;
                   return (
                     <div
@@ -446,6 +479,57 @@ export const BattleHub: React.FC<BattleHubProps> = ({
                 })}
               </div>
             </div>
+
+            {onToggleModifier && selectedMode !== 'pvp_local' && (
+              <div className="isekai-card rounded-xl p-3 space-y-2">
+                <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
+                  <span className="font-display font-bold text-[#F1F5F9] flex items-center gap-1.5">
+                    <Flame className="w-3.5 h-3.5 text-[#F97316]" />
+                    <span>تعديلات المخاطرة للساحة (تحدٍ اختياري)</span>
+                  </span>
+                  <span
+                    className={`font-mono-num text-[11px] font-bold ${
+                      modifierBonusPct > 0 ? 'text-[#10B981]' : 'text-[#94A3B8]'
+                    }`}
+                  >
+                    {modifierBonusPct > 0 ? `+${modifierBonusPct}% غنائم إضافية نشطة` : 'قياسي (+0%)'}
+                  </span>
+                </div>
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                  {ARENA_MODIFIERS.map((mod) => {
+                    const active = selectedModifiers.includes(mod.id);
+                    return (
+                      <button
+                        key={mod.id}
+                        type="button"
+                        onClick={() => onToggleModifier(mod.id)}
+                        title={mod.desc}
+                        style={
+                          active
+                            ? { borderColor: mod.color, backgroundColor: 'rgba(23,36,61,0.92)' }
+                            : undefined
+                        }
+                        className={`text-right px-2.5 py-1.5 rounded-lg border transition-colors cursor-pointer ${
+                          active
+                            ? 'text-[#F8FAFC]'
+                            : 'bg-[#0A101E] border-white/10 text-[#94A3B8] hover:border-white/25'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between gap-1 text-[11px] font-bold">
+                          <span className="truncate" style={{ color: active ? mod.color : undefined }}>
+                            {mod.name}
+                          </span>
+                          <span className="font-mono-num text-[#10B981] shrink-0">
+                            +{mod.rewardBonusPct}%
+                          </span>
+                        </div>
+                        <p className="text-[10px] text-[#94A3B8] truncate mt-0.5">{mod.desc}</p>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
 
             <div className="flex flex-wrap items-center gap-3">
               <button
@@ -565,28 +649,28 @@ export const BattleHub: React.FC<BattleHubProps> = ({
           )}
 
           <div className="grid grid-cols-4 divide-x divide-x-reverse divide-white/10 border-t border-[#E6B85C]/20 bg-[#0B111E]">
-            <div className="p-3 text-center">
+            <div className="p-2.5 text-center">
               <div className="text-[11px] text-[#94A3B8]">الصحة</div>
               <div className="font-mono-num text-sm font-semibold text-[#F8FAFC] mt-0.5">
                 {derived.maxHp}
               </div>
             </div>
-            <div className="p-3 text-center">
+            <div className="p-2.5 text-center">
               <div className="text-[11px] text-[#94A3B8]">الهجوم</div>
               <div className="font-mono-num text-sm font-semibold text-[#E6B85C] mt-0.5">
                 {derived.attackDamage}
               </div>
             </div>
-            <div className="p-3 text-center">
-              <div className="text-[11px] text-[#94A3B8]">السرعة</div>
-              <div className="font-mono-num text-sm font-semibold text-[#38BDF8] mt-0.5">
-                {derived.moveSpeed}
+            <div className="p-2.5 text-center">
+              <div className="text-[11px] text-[#94A3B8]">المانا / ث</div>
+              <div className="font-mono-num text-xs sm:text-sm font-semibold text-[#38BDF8] mt-0.5">
+                {derived.maxMana} (+{derived.manaRegen})
               </div>
             </div>
-            <div className="p-3 text-center">
-              <div className="text-[11px] text-[#94A3B8]">الدفاع</div>
-              <div className="font-mono-num text-sm font-semibold text-[#10B981] mt-0.5">
-                {Math.round(derived.armorReduction * 100)}%
+            <div className="p-2.5 text-center">
+              <div className="text-[11px] text-[#94A3B8]">ستامينا / صدّ</div>
+              <div className="font-mono-num text-xs sm:text-sm font-semibold text-[#10B981] mt-0.5">
+                {derived.maxStamina} · {derived.parryWindowSec}ث
               </div>
             </div>
           </div>
